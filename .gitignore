@@ -1,0 +1,14 @@
+# Local state and private workflow sources never belong in the public repository.
+.DS_Store
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+.flow/
+flows/private/
+profiles/
+runs/
+receipts/
+logs/
+
