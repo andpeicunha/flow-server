@@ -44,7 +44,7 @@
 ## PR 6 — clientes opcionais, MCP V1 e Docker read-only
 
 - [ ] Migrar flow-web e flow-tui para API, preservando Herdr como dependência opcional.
-- [ ] Implementar `flow-mcp` local contra loopback, com allowlist de tools e confirmação para operações host-side.
+- [x] Implementar `flow-mcp` local contra loopback, com allowlist de tools e confirmação para operações host-side.
 - [ ] Remover da flow-web toda criação/início de run e adicionar `flowId`/`runId` como filtros query-string documentados e testados.
 - [ ] Criar Docker viewer/audit read-only, sem adapters, worktree ou Docker socket.
 - [ ] Verificar: imagem não escreve volume, não contém secrets/profiles e funciona com fixture pública.

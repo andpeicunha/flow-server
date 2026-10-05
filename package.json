@@ -6,7 +6,8 @@
   "type": "module",
   "bin": {
     "flow-server": "./src/cli/flow-server.mjs",
-    "flow": "./src/cli/flow.mjs"
+    "flow": "./src/cli/flow.mjs",
+    "flow-mcp": "./src/cli/flow-mcp.mjs"
   },
   "exports": {
     "./core/lifecycle": "./src/core/lifecycle.js",
@@ -16,6 +17,8 @@
     "./core/state-dir": "./src/core/state-dir.js",
     "./core/state-store": "./src/core/state-store.js",
     "./adapters/runtime-adapter": "./src/adapters/runtime-adapter.js",
+    "./mcp/local-client": "./src/mcp/local-client.js",
+    "./mcp/server": "./src/mcp/server.js",
     "./service/http-server": "./src/service/http-server.js",
     "./service/run-service": "./src/service/run-service.js",
     "./service/service-host": "./src/service/service-host.js"

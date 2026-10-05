@@ -88,3 +88,9 @@ Codex and Claude are separate runtime contracts. Both support guided mode only
 in this development build. Direct mode and adapter launch fail closed. No
 adapter can run until a later approved change adds local authorization and a
 host launcher.
+
+## Local MCP
+
+`flow-mcp` lets Codex call the local flow service from a prompt. It uses stdio
+and connects only to the loopback service. Setup instructions are in
+[docs/codex-mcp.md](docs/codex-mcp.md).
