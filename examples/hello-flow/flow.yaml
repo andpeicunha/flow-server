@@ -1,0 +1,10 @@
+# Synthetic example: no runtime command is executed by this fixture.
+schemaVersion: v1
+id: hello-flow
+title: Hello flow
+nodes:
+  - id: prepare
+    title: Prepare a fictional workspace
+  - id: verify
+    title: Verify the synthetic result
+    dependsOn: [prepare]

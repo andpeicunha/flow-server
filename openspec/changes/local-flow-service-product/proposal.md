@@ -1,13 +1,13 @@
 # Flow-server como serviço local distribuível
 
-## Por quê
+## Why
 
 O flow-server já preserva DAG YAML, checkpoints, receipts e auditoria local,
 mas ainda é iniciado a partir de `opencode/flow-runner` e depende de paths do
 dotfiles. O servidor HTTP atual também inicia runs diretamente. Isso mistura
 produto, configuração pessoal, viewer e execução de agentes.
 
-## Objetivo desta change
+## What Changes
 
 Definir a migração incremental para um produto local e público, sem mover
 arquivos, alterar flows ou publicar pacotes nesta change. O destino é um novo
@@ -18,13 +18,11 @@ arquitetura alvo é:
 - `flow-service`: processo local, dono exclusivo do estado e API loopback;
 - `flow-cli`: cliente para listar, iniciar, inspecionar, checkpointar e auditar;
 - `flow-web`: viewer opcional;
-- `runtime-adapters`: Codex, Claude e Cursor, explicitamente selecionados;
+- `runtime-adapters`: Codex e Claude, explicitamente selecionados;
 - `flow-tui`: cliente Herdr opcional, fora do core;
 - `profiles`: entradas externas, opt-in e nunca empacotadas por padrão.
 - `flow-mcp`: bridge local para harnesses de agentes, consumindo só o serviço
   loopback;
-- `flow-registry` (V2): control plane privado para distribuição autenticada de
-  flows, separado do serviço que executa no host.
 
 ## Escopo
 
@@ -34,13 +32,15 @@ arquitetura alvo é:
 - Viewer/audit Docker somente leitura; executor Docker é explicitamente excluído.
 - Layout e critérios de um exemplo público sintético e quickstart curto.
 - Sequência de PRs, migração, rollback, compatibilidade e release.
-- Design V2 de registry privado e MCP local, sem implementar login social,
-  VPS, sincronização remota ou publicar flows reais nesta change.
+- MCP local V1 para harnesses de agentes, sem login social, VPS, sincronização
+  remota ou publicação de flows reais. O registry privado é uma change V2
+  separada.
 
 ## Fora de escopo
 
 - Mover ou renomear `opencode/flow-runner` ou `opencode/bin/flow`.
-- Implementar serviço, API, CLI, adapters, Dockerfile ou pacote npm.
+- Implementar registry, login social, VPS, sincronização remota, Dockerfile ou
+  pacote npm.
 - Copiar, publicar ou inspecionar conteúdo de profiles privados, sessões,
   credenciais, logs ou runs reais.
 - Executar agentes em Docker, montar worktrees para execução em container, ou
@@ -59,7 +59,6 @@ arquitetura alvo é:
 - `docker-readonly-viewer-audit`
 - `flow-web-observer-navigation`
 - `local-flow-mcp-bridge`
-- `private-flow-registry-v2`
 - `public-flow-example-and-release`
 
 ### Modificadas
@@ -93,6 +92,6 @@ arquitetura alvo é:
 7. O novo repo público contém código, schemas, MCP e exemplos sintéticos; não
    contém flows de empresas, nomes de clientes, processos internos, runs ou
    qualquer configuração de ambiente.
-8. V1 é local-first: flows privados são arquivos locais opt-in. V2 poderá
-   sincronizá-los de registry privado autenticado, mas a VPS nunca executa
-   agentes nem recebe worktree, prompts, receipts ou evidências por default.
+8. V1 é local-first: flows privados são arquivos locais opt-in. Registry e
+   sincronização remota ficam fora desta change e exigem threat model e
+   OpenSpec próprios antes de qualquer implementação.

@@ -13,3 +13,6 @@ minutos, sem dependência de profile, runtime real ou dado pessoal.
 Antes de publicar, a release SHALL ter licença, README, threat model, secret
 scan, testes, exemplos e verificação de conteúdo do artefato.
 
+#### Scenario: Gate de release incompleto
+- **WHEN** qualquer item obrigatório de release estiver ausente ou falhar
+- **THEN** CI bloqueia a publicação e informa o item pendente

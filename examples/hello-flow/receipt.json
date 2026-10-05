@@ -1,0 +1,9 @@
+{
+  "schemaVersion": "v1",
+  "runId": "run_hello-001",
+  "nodeId": "verify",
+  "status": "completed",
+  "recordedAt": "2026-01-01T00:01:00.000Z",
+  "summary": "Synthetic verification completed.",
+  "redactions": 0
+}

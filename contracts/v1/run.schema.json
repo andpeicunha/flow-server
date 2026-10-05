@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flow-server.dev/contracts/v1/run.schema.json",
+  "title": "Run summary",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "flowId", "runtime", "executionMode", "status", "createdAt"],
+  "properties": {
+    "schemaVersion": { "const": "v1" },
+    "id": { "type": "string", "pattern": "^run_[a-z0-9-]{1,63}$" },
+    "flowId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$" },
+    "runtime": { "enum": ["codex", "claude"] },
+    "executionMode": { "enum": ["guided", "direct"] },
+    "status": { "enum": ["created", "running", "paused", "stopped", "completed", "failed"] },
+    "createdAt": { "type": "string", "format": "date-time" }
+  }
+}

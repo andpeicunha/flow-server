@@ -1,0 +1,65 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "flow-service local API",
+    "version": "1.0.0-draft",
+    "description": "Loopback-only API. Mutating routes require a local token and an idempotency key."
+  },
+  "servers": [{ "url": "http://127.0.0.1:{port}", "variables": { "port": { "default": "4729" } } }],
+  "paths": {
+    "/v1/health": {
+      "get": { "operationId": "health", "responses": { "200": { "$ref": "#/components/responses/Health" } } }
+    },
+    "/v1/flows": {
+      "get": { "operationId": "listFlows", "parameters": [{ "$ref": "#/components/parameters/Cursor" }, { "$ref": "#/components/parameters/Limit" }], "responses": { "200": { "$ref": "#/components/responses/FlowPage" } } }
+    },
+    "/v1/runs": {
+      "get": { "operationId": "listRuns", "parameters": [{ "$ref": "#/components/parameters/FlowId" }, { "$ref": "#/components/parameters/RunId" }, { "$ref": "#/components/parameters/Cursor" }, { "$ref": "#/components/parameters/Limit" }], "responses": { "200": { "$ref": "#/components/responses/RunPage" } } },
+      "post": { "operationId": "createRun", "parameters": [{ "$ref": "#/components/parameters/LocalToken" }, { "$ref": "#/components/parameters/IdempotencyKey" }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateRunRequest" } } } }, "responses": { "201": { "$ref": "#/components/responses/Run" }, "200": { "$ref": "#/components/responses/Run" }, "400": { "$ref": "#/components/responses/Error" }, "401": { "$ref": "#/components/responses/Error" }, "409": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/v1/runs/{id}": {
+      "get": { "operationId": "getRun", "parameters": [{ "$ref": "#/components/parameters/RunPathId" }], "responses": { "200": { "$ref": "#/components/responses/Run" }, "404": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/v1/runs/{id}/checkpoint": {
+      "post": { "operationId": "checkpointRun", "parameters": [{ "$ref": "#/components/parameters/RunPathId" }, { "$ref": "#/components/parameters/LocalToken" }, { "$ref": "#/components/parameters/IdempotencyKey" }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CheckpointRequest" } } } }, "responses": { "200": { "$ref": "#/components/responses/Run" }, "400": { "$ref": "#/components/responses/Error" }, "401": { "$ref": "#/components/responses/Error" }, "404": { "$ref": "#/components/responses/Error" }, "409": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/v1/runs/{id}/lifecycle": {
+      "post": { "operationId": "transitionRun", "parameters": [{ "$ref": "#/components/parameters/RunPathId" }, { "$ref": "#/components/parameters/LocalToken" }, { "$ref": "#/components/parameters/IdempotencyKey" }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LifecycleRequest" } } } }, "responses": { "200": { "$ref": "#/components/responses/Run" }, "400": { "$ref": "#/components/responses/Error" }, "401": { "$ref": "#/components/responses/Error" }, "404": { "$ref": "#/components/responses/Error" }, "409": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/v1/runs/{id}/audit": {
+      "get": { "operationId": "getAudit", "parameters": [{ "$ref": "#/components/parameters/RunPathId" }], "responses": { "200": { "$ref": "#/components/responses/Audit" }, "404": { "$ref": "#/components/responses/Error" } } },
+      "post": { "operationId": "auditRun", "parameters": [{ "$ref": "#/components/parameters/RunPathId" }, { "$ref": "#/components/parameters/LocalToken" }, { "$ref": "#/components/parameters/IdempotencyKey" }], "responses": { "200": { "$ref": "#/components/responses/Audit" }, "401": { "$ref": "#/components/responses/Error" }, "404": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/v1/service/shutdown": {
+      "post": { "operationId": "shutdown", "parameters": [{ "$ref": "#/components/parameters/LocalToken" }, { "$ref": "#/components/parameters/IdempotencyKey" }], "responses": { "202": { "description": "Shutdown accepted" }, "401": { "$ref": "#/components/responses/Error" } } }
+    }
+  },
+  "components": {
+    "parameters": {
+      "LocalToken": { "name": "X-Flow-Local-Token", "in": "header", "required": true, "schema": { "type": "string", "minLength": 32 }, "description": "Owner-only token created by flow-service." },
+      "IdempotencyKey": { "name": "Idempotency-Key", "in": "header", "required": true, "schema": { "type": "string", "minLength": 16, "maxLength": 128 }, "description": "The same key and request return the original result; reuse with a different request returns 409." },
+      "RunPathId": { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "pattern": "^run_[a-z0-9-]{1,63}$" } },
+      "FlowId": { "name": "flowId", "in": "query", "schema": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$" } },
+      "RunId": { "name": "runId", "in": "query", "schema": { "type": "string", "pattern": "^run_[a-z0-9-]{1,63}$" } },
+      "Cursor": { "name": "cursor", "in": "query", "schema": { "type": "string", "minLength": 1, "maxLength": 512 } },
+      "Limit": { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 50 } }
+    },
+    "schemas": {
+      "CreateRunRequest": { "type": "object", "additionalProperties": false, "required": ["flowId", "workspace", "runtime", "executionMode"], "properties": { "flowId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$" }, "workspace": { "type": "string", "minLength": 1, "maxLength": 4096 }, "runtime": { "enum": ["codex", "claude"] }, "executionMode": { "enum": ["guided", "direct"] } } },
+      "CheckpointRequest": { "type": "object", "additionalProperties": false, "required": ["receipt"], "properties": { "receipt": { "$ref": "receipt.schema.json" } } },
+      "LifecycleRequest": { "type": "object", "additionalProperties": false, "required": ["action"], "properties": { "action": { "enum": ["start", "pause", "resume", "stop", "complete", "fail"] } } },
+      "Flow": { "type": "object", "additionalProperties": false, "required": ["id", "title"], "properties": { "id": { "type": "string" }, "title": { "type": "string" } } },
+      "Run": { "$ref": "run.schema.json" },
+      "Audit": { "type": "object", "additionalProperties": false, "required": ["schemaVersion", "runId", "result", "findings"], "properties": { "schemaVersion": { "const": "v1" }, "runId": { "type": "string" }, "result": { "enum": ["passed", "failed"] }, "findings": { "type": "array" } } },
+      "Error": { "$ref": "http-error.schema.json" }
+    },
+    "responses": {
+      "Health": { "description": "Service health", "content": { "application/json": { "schema": { "type": "object", "required": ["version", "pid", "bind", "status"], "properties": { "version": { "type": "string" }, "pid": { "type": "integer" }, "bind": { "const": "127.0.0.1" }, "status": { "enum": ["ready", "stopping"] } } } } } },
+      "FlowPage": { "description": "Page of flows", "content": { "application/json": { "schema": { "type": "object", "required": ["items"], "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/Flow" } }, "nextCursor": { "type": ["string", "null"] } } } } } },
+      "RunPage": { "description": "Page of runs", "content": { "application/json": { "schema": { "type": "object", "required": ["items"], "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/Run" } }, "nextCursor": { "type": ["string", "null"] } } } } } },
+      "Run": { "description": "Redacted run", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Run" } } } },
+      "Audit": { "description": "Redacted deterministic audit", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Audit" } } } },
+      "Error": { "description": "Error", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+    }
+  }
+}

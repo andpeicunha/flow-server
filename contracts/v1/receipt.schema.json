@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flow-server.dev/contracts/v1/receipt.schema.json",
+  "title": "Redacted node receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "runId", "nodeId", "status", "recordedAt"],
+  "properties": {
+    "schemaVersion": { "const": "v1" },
+    "runId": { "type": "string", "pattern": "^run_[a-z0-9-]{1,63}$" },
+    "nodeId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$" },
+    "status": { "enum": ["completed", "failed", "skipped"] },
+    "recordedAt": { "type": "string", "format": "date-time" },
+    "summary": { "type": "string", "maxLength": 4000 },
+    "redactions": { "type": "integer", "minimum": 0 }
+  }
+}

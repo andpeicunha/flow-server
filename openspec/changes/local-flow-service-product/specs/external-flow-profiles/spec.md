@@ -20,3 +20,7 @@ core < flow externo < profile explicitamente selecionado.
 O build público SHALL usar allowlist e testes para excluir profiles privados,
 configurações pessoais, credenciais, sessões, logs e runs reais.
 
+#### Scenario: Artefato contém arquivo não permitido
+- **WHEN** tarball, imagem ou release inclui profile privado, run, receipt,
+  configuração pessoal ou credencial
+- **THEN** o gate de publicação falha antes de publicar o artefato

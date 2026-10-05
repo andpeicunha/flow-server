@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flow-server.dev/contracts/v1/run-state-machine.json",
+  "title": "Run lifecycle transitions",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "states", "transitions"],
+  "properties": {
+    "schemaVersion": { "const": "v1" },
+    "states": {
+      "type": "array",
+      "const": ["created", "running", "paused", "stopped", "completed", "failed"]
+    },
+    "transitions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["from", "action", "to"],
+        "properties": {
+          "from": { "enum": ["created", "running", "paused"] },
+          "action": { "enum": ["start", "pause", "resume", "stop", "complete", "fail"] },
+          "to": { "enum": ["running", "paused", "stopped", "completed", "failed"] }
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "schemaVersion": "v1",
+      "states": ["created", "running", "paused", "stopped", "completed", "failed"],
+      "transitions": [
+        { "from": "created", "action": "start", "to": "running" },
+        { "from": "created", "action": "stop", "to": "stopped" },
+        { "from": "running", "action": "pause", "to": "paused" },
+        { "from": "running", "action": "stop", "to": "stopped" },
+        { "from": "running", "action": "complete", "to": "completed" },
+        { "from": "running", "action": "fail", "to": "failed" },
+        { "from": "paused", "action": "resume", "to": "running" },
+        { "from": "paused", "action": "stop", "to": "stopped" }
+      ]
+    }
+  ]
+}

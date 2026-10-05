@@ -6,9 +6,9 @@ dist/
 .env.*
 !.env.example
 .flow/
+AI_MEMORY.md
 flows/private/
 profiles/
 runs/
 receipts/
 logs/
-

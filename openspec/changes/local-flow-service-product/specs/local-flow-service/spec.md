@@ -36,7 +36,20 @@ aplicar redaction antes de persistir ou retornar receipts/logs pela API.
 - **WHEN** checkpoint recebe campo credential-shaped ou token reconhecível
 - **THEN** o valor redigido é persistido e retornado sem upload externo
 
-### Requirement: Segurança de exposição futura
-A documentação SHALL declarar que autenticação não é exigida apenas no bind
-estritamente loopback e que exposição de porta é não suportada nesta fase.
+#### Scenario: Conteúdo sensível recebido
+- **WHEN** receipt ou log contém valor identificado como sensível
+- **THEN** o serviço grava e retorna `[REDACTED]`, nunca o valor original; os
+  demais metadados do receipt continuam disponíveis para auditoria local
 
+### Requirement: Segurança de exposição futura
+O serviço SHALL exigir token local nas rotas mutáveis, mesmo em loopback, e a
+documentação SHALL declarar que exposição de porta é não suportada nesta fase.
+
+#### Scenario: Requisição mutável sem token local
+- **WHEN** uma chamada cria, checkpointa, altera lifecycle ou desliga o serviço
+  sem o token local válido
+- **THEN** o serviço a rejeita sem alterar state ou iniciar adapter
+
+#### Scenario: Tentativa de bind externo
+- **WHEN** o usuário tenta iniciar o serviço fora de `127.0.0.1`
+- **THEN** o comando falha e informa que esse modo não é suportado na V1
