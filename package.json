@@ -7,7 +7,8 @@
   "bin": {
     "flow-server": "./src/cli/flow-server.mjs",
     "flow": "./src/cli/flow.mjs",
-    "flow-mcp": "./src/cli/flow-mcp.mjs"
+    "flow-mcp": "./src/cli/flow-mcp.mjs",
+    "flow-remote-mcp": "./src/cli/flow-remote-mcp.mjs"
   },
   "exports": {
     "./core/lifecycle": "./src/core/lifecycle.js",
@@ -19,6 +20,9 @@
     "./adapters/runtime-adapter": "./src/adapters/runtime-adapter.js",
     "./mcp/local-client": "./src/mcp/local-client.js",
     "./mcp/server": "./src/mcp/server.js",
+    "./mcp/remote-server": "./src/mcp/remote-server.js",
+    "./remote/catalog": "./src/remote/catalog.js",
+    "./remote/release-file": "./src/remote/release-file.js",
     "./service/http-server": "./src/service/http-server.js",
     "./service/run-service": "./src/service/run-service.js",
     "./service/service-host": "./src/service/service-host.js"

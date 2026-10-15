@@ -16,27 +16,27 @@
 
 **[us]**
 
-- [ ] Add versioned approved-flow storage with deterministic content hashes.
-- [ ] Add a remote catalog domain for recommendation and exact definition lookup.
-- [ ] Add strict redacted-evidence validation and server-generated evidence IDs.
-- [ ] Add safe run listing, evidence lookup, analysis, and `pending_review` proposals.
-- [ ] Add the separate `flow-remote-mcp` stdio entrypoint and bounded tools.
-- [ ] Require a configured bearer token and keep it out of errors and logs.
-- [ ] Add unit and integration tests for authorization, catalog lookup, validation,
+- [x] Add versioned approved-flow storage with deterministic content hashes.
+- [x] Add a remote catalog domain for recommendation and exact definition lookup.
+- [x] Add strict redacted-evidence validation and server-generated evidence IDs.
+- [x] Add safe run listing, evidence lookup, analysis, and `pending_review` proposals.
+- [x] Add the separate `flow-remote-mcp` stdio entrypoint and bounded tools.
+- [x] Require a configured bearer token and keep it out of errors and logs.
+- [x] Add unit and integration tests for authorization, catalog lookup, validation,
   redaction, analysis, and non-mutation guarantees.
-- [ ] Update public documentation with local development and test commands.
+- [x] Update public documentation with local development and test commands.
 
 **[pt]**
 
-- [ ] Adicionar armazenamento de flow aprovado e versionado com hashes de conteúdo determinísticos.
-- [ ] Adicionar domínio de catálogo remoto para recomendação e busca exata de definição.
-- [ ] Adicionar validação estrita de evidência redigida e IDs de evidência gerados pelo servidor.
-- [ ] Adicionar listagem segura de runs, busca de evidência, análise e propostas `pending_review`.
-- [ ] Adicionar entrypoint stdio separado `flow-remote-mcp` e tools limitadas.
-- [ ] Exigir bearer token configurado e mantê-lo fora de erros e logs.
-- [ ] Adicionar testes unitários e de integração para autorização, busca de catálogo,
+- [x] Adicionar armazenamento de flow aprovado e versionado com hashes de conteúdo determinísticos.
+- [x] Adicionar domínio de catálogo remoto para recomendação e busca exata de definição.
+- [x] Adicionar validação estrita de evidência redigida e IDs de evidência gerados pelo servidor.
+- [x] Adicionar listagem segura de runs, busca de evidência, análise e propostas `pending_review`.
+- [x] Adicionar entrypoint stdio separado `flow-remote-mcp` e tools limitadas.
+- [x] Exigir bearer token configurado e mantê-lo fora de erros e logs.
+- [x] Adicionar testes unitários e de integração para autorização, busca de catálogo,
   validação, redaction, análise e garantias de não mutação.
-- [ ] Atualizar documentação pública com comandos locais de desenvolvimento e teste.
+- [x] Atualizar documentação pública com comandos locais de desenvolvimento e teste.
 
 **[pt]**
 

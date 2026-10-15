@@ -94,3 +94,23 @@ host launcher.
 `flow-mcp` lets Codex call the local flow service from a prompt. It uses stdio
 and connects only to the loopback service. Setup instructions are in
 [docs/codex-mcp.md](docs/codex-mcp.md).
+
+## Remote catalog MCP (V2 development)
+
+`flow-remote-mcp` is separate from the local `flow-mcp` bridge. It has only
+versioned-flow catalog and safe run-analysis tools. It cannot run agents, use a
+shell, access a workspace, or publish a flow.
+
+For local protocol development, create an explicit JSON catalog file with a
+`releases` array. Set its absolute path and a unique bearer token with at least
+16 characters, then start the stdio server:
+
+```sh
+export FLOW_REMOTE_MCP_BEARER_TOKEN="replace-with-a-unique-development-token"
+export FLOW_REMOTE_MCP_CATALOG_FILE="/absolute/path/to/approved-releases.json"
+flow-remote-mcp
+```
+
+The remote transport must pass this value as `Bearer <token>` in the MCP request
+authorization context. Do not put this token in a flow definition, prompt,
+repository, or log. A VPS deployment and WorkOS OAuth are not included yet.
