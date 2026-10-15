@@ -1,0 +1,16 @@
+services:
+  flow-mcp:
+    image: ghcr.io/andpeicunha/flow-server-mcp:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    env_file: config
+    ports:
+      - "127.0.0.1:3422:3422"
+    volumes:
+      - ./approved-releases.json:/app/config/approved-releases.json:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL

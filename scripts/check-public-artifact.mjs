@@ -5,10 +5,17 @@ import { join, relative } from "node:path";
 const root = new URL("..", import.meta.url).pathname;
 const excluded = new Set([".git", "node_modules", "dist"]);
 const prohibitedPaths = /(^|\/)(profiles|runs|receipts|logs)(\/|$)|\.env(\.|$)/;
-const sensitiveText = [
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----/i,
-  /(?:api[_-]?key|access[_-]?token|secret)\s*[:=]\s*[^\s]+/i
-];
+const privateKey = /-----BEGIN [A-Z ]*PRIVATE KEY-----/i;
+const credentialAssignment = /(?:api[_-]?key|access[_-]?token|secret)[ \t]*[:=][ \t]*([^\s]+)/gi;
+
+function hasPossibleCredential(text) {
+  if (privateKey.test(text)) return true;
+  for (const match of text.matchAll(credentialAssignment)) {
+    const value = match[1];
+    if (!value.startsWith("process.env.") && !value.startsWith("config.") && !value.startsWith("${{") && !value.startsWith("${")) return true;
+  }
+  return false;
+}
 
 async function files(directory) {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -27,7 +34,7 @@ for (const file of await files(root)) {
   const name = relative(root, file);
   if (prohibitedPaths.test(name)) failures.push(`${name}: prohibited path`);
   const text = await readFile(file, "utf8");
-  if (sensitiveText.some((pattern) => pattern.test(text))) {
+  if (hasPossibleCredential(text)) {
     failures.push(`${name}: possible credential`);
   }
 }

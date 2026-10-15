@@ -1,0 +1,72 @@
+name: Deploy Flow Remote MCP
+
+on:
+  push:
+    branches: [main]
+    paths: ["src/remote/**", "deploy/mcp/**", ".github/workflows/deploy-remote-mcp.yml", "package.json", "package-lock.json"]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: MCP_PROD
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/mcp/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/andpeicunha/flow-server-mcp:latest
+            ghcr.io/andpeicunha/flow-server-mcp:${{ github.sha }}
+      - uses: appleboy/scp-action@v1.0.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          source: deploy/mcp/docker-compose.yml,deploy/mcp/Caddyfile
+          target: /tmp/flow-mcp-deploy
+      - uses: appleboy/ssh-action@v1.2.1
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          password: ${{ secrets.SSH_PASSWORD }}
+          script: |
+            install -d -m 700 /opt/flow-mcp
+            install -m 600 /tmp/flow-mcp-deploy/deploy/mcp/docker-compose.yml /opt/flow-mcp/docker-compose.yml
+            sed 's/__FLOW_MCP_DOMAIN__/${{ vars.MCP_DOMAIN }}/g' /tmp/flow-mcp-deploy/deploy/mcp/Caddyfile > /tmp/flow-mcp.Caddyfile
+            if ! grep -Fq '${{ vars.MCP_DOMAIN }} {' /etc/caddy/Caddyfile; then
+              cat /tmp/flow-mcp.Caddyfile >> /etc/caddy/Caddyfile
+            fi
+            cat > /opt/flow-mcp/config <<'EOF'
+            MCP_ACCESS_TOKEN=${{ secrets.MCP_ACCESS_TOKEN }}
+            MCP_CATALOG_FILE=/app/config/approved-releases.json
+            MCP_ALLOWED_HOST=${{ vars.MCP_DOMAIN }}
+            OAUTH_ISSUER=${{ vars.OAUTH_ISSUER }}
+            OAUTH_RESOURCE=${{ vars.OAUTH_RESOURCE }}
+            OAUTH_ALLOWED_SUBJECTS=${{ vars.OAUTH_ALLOWED_SUBJECTS }}
+            IMAGE_TAG=${{ github.sha }}
+            EOF
+            chmod 600 /opt/flow-mcp/config
+            test -f /opt/flow-mcp/approved-releases.json
+            cd /opt/flow-mcp
+            echo '${{ github.token }}' | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
+            docker compose pull
+            docker logout ghcr.io
+            docker compose up -d --force-recreate
+            caddy validate --config /etc/caddy/Caddyfile
+            systemctl reload caddy
+            for attempt in $(seq 1 15); do
+              if curl --silent --show-error --fail http://127.0.0.1:3422/healthz; then exit 0; fi
+              sleep 2
+            done
+            exit 1
