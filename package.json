@@ -21,6 +21,7 @@
     "./mcp/local-client": "./src/mcp/local-client.js",
     "./mcp/server": "./src/mcp/server.js",
     "./mcp/remote-server": "./src/mcp/remote-server.js",
+    "./mcp/remote-http-server": "./src/mcp/remote-http-server.js",
     "./remote/catalog": "./src/remote/catalog.js",
     "./remote/release-file": "./src/remote/release-file.js",
     "./service/http-server": "./src/service/http-server.js",

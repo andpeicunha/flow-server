@@ -3,6 +3,7 @@ import test from "node:test";
 import { RemoteFlowCatalog, contentHash } from "../src/remote/catalog.js";
 import { loadRemoteReleases } from "../src/remote/release-file.js";
 import { callRemoteTool, handleRemoteRequest, remoteTools } from "../src/mcp/remote-server.js";
+import { createRemoteMcpHttpServer } from "../src/mcp/remote-http-server.js";
 
 function fixture() {
   let next = 0;
@@ -69,4 +70,20 @@ test("remote catalog loads releases only from an explicit JSON catalog file", as
   const releases = await loadRemoteReleases("/catalog.json", { fs: { readFile: async () => JSON.stringify({ releases: [{ flowId: "sdd" }] }) } });
   assert.deepEqual(releases, [{ flowId: "sdd" }]);
   await assert.rejects(loadRemoteReleases("catalog.yaml"), (error) => error.code === "REMOTE_CATALOG_FILE_INVALID");
+});
+
+test("remote HTTP transport accepts only authenticated non-browser MCP requests", async () => {
+  const server = createRemoteMcpHttpServer({ catalog: fixture(), bearerToken: context.bearerToken });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const endpoint = `http://127.0.0.1:${server.address().port}/mcp`;
+    const denied = await fetch(endpoint, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "flow_recommend", arguments: { taskSummary: "sdd" } } }) });
+    assert.equal((await denied.json()).result.isError, true);
+    const allowed = await fetch(endpoint, { method: "POST", headers: { "content-type": "application/json", authorization: context.authorization }, body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "flow_recommend", arguments: { taskSummary: "validate sdd" } } }) });
+    assert.equal((await allowed.json()).result.structuredContent[0].flowId, "sdd");
+    const browser = await fetch(endpoint, { method: "POST", headers: { origin: "https://example.test" }, body: "{}" });
+    assert.equal(browser.status, 404);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
 });
