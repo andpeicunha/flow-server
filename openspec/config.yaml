@@ -1,5 +1,12 @@
 schema: spec-driven
 
+context: |
+  Escreva propostas, designs, tarefas e specs em inglês e pt-BR.
+  Em cada tópico, escreva primeiro `[us]` e o trecho em inglês; depois `[pt]`
+  e o trecho em pt-BR.
+  Mantenha código, paths, comandos, nomes de tools, campos de API e termos
+  técnicos estabelecidos em inglês.
+
 # Project context (optional)
 # This is shown to AI when creating artifacts.
 # Add your tech stack, conventions, style guides, domain knowledge, etc.
