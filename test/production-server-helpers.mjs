@@ -60,6 +60,10 @@ export async function startProductionServer(extraEnv = {}) {
 }
 
 export async function mcpRequest(endpoint, body, { bearer = token, headers = {} } = {}) {
+  return rawMcpRequest(endpoint, JSON.stringify(body), { bearer, headers });
+}
+
+export async function rawMcpRequest(endpoint, body, { bearer = token, headers = {} } = {}) {
   const response = await fetch(`${endpoint}/mcp`, {
     method: "POST",
     headers: {
@@ -68,7 +72,7 @@ export async function mcpRequest(endpoint, body, { bearer = token, headers = {} 
       ...(bearer === null ? {} : { authorization: `Bearer ${bearer}` }),
       ...headers
     },
-    body: JSON.stringify(body)
+    body
   });
   const text = await response.text();
   const event = text.match(/^data: (.*)$/m);

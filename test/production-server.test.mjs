@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import http from "node:http";
 import test from "node:test";
-import { assertHealthyMcp, mcpRequest, rpc, startProductionServer, token } from "./production-server-helpers.mjs";
+import { assertHealthyMcp, mcpRequest, rawMcpRequest, rpc, startProductionServer, token } from "./production-server-helpers.mjs";
 
 test("production MCP serves health, initialize, and bounded catalog tools", async (t) => {
   const service = await startProductionServer();
@@ -40,6 +40,21 @@ test("production MCP rejects unauthenticated, invalid, and unsafe requests witho
   assert.doesNotMatch(JSON.stringify(unsafe.body), /must-not-be-accepted/);
   const runs = await mcpRequest(service.endpoint, rpc("tools/call", { name: "flow_list_runs", arguments: { flowId: "sdd", version: "2.0.0" } }));
   assert.deepEqual(runs.body.result.structuredContent.items, []);
+});
+
+test("production MCP rejects oversized JSON and never logs malformed JSON bodies", async (t) => {
+  const service = await startProductionServer();
+  t.after(() => service.stop());
+  const oversized = await rawMcpRequest(service.endpoint, JSON.stringify({ ...rpc("tools/list", {}), padding: "x".repeat(65 * 1024) }));
+  assert.equal(oversized.response.status, 413);
+  assert.deepEqual(oversized.body, { error: "Request body is too large." });
+
+  const marker = "malformed-body-must-not-be-logged";
+  const malformed = await rawMcpRequest(service.endpoint, `{"jsonrpc":"2.0","marker":"${marker}"`);
+  assert.equal(malformed.response.status, 400);
+  assert.deepEqual(malformed.body, { error: "Invalid JSON request." });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.doesNotMatch(service.output.join(""), new RegExp(marker));
 });
 
 test("production MCP exposes OAuth protected-resource metadata and its challenge without a tenant", async (t) => {
