@@ -16,6 +16,7 @@ function fixture() {
       title: "SDD",
       summary: "Validate a software design document.",
       tags: ["sdd", "validate"],
+      approved: true,
       definition: { schemaVersion: "v1", nodes: [{ id: "review" }] }
     }]
   });
@@ -31,6 +32,18 @@ test("remote catalog returns versioned definitions with deterministic hashes", (
   const definition = catalog.getDefinition("sdd", "2.0.0");
   assert.equal(definition.contentHash, contentHash(definition.definition));
   assert.throws(() => catalog.getDefinition("sdd", "2.0.1"), (error) => error.code === "REMOTE_RELEASE_NOT_FOUND");
+});
+
+test("remote catalog requires an explicitly approved release", () => {
+  const release = {
+    flowId: "sdd",
+    version: "2.0.0",
+    title: "SDD",
+    summary: "Validate a software design document.",
+    definition: { schemaVersion: "v1", nodes: [] }
+  };
+  assert.throws(() => new RemoteFlowCatalog({ releases: [release] }), (error) => error.code === "REMOTE_RELEASE_INVALID");
+  assert.throws(() => new RemoteFlowCatalog({ releases: [{ ...release, approved: false }] }), (error) => error.code === "REMOTE_RELEASE_INVALID");
 });
 
 test("remote catalog rejects unsafe evidence and stores safe evidence only", () => {

@@ -74,8 +74,8 @@ export class RemoteFlowCatalog {
 
   addRelease(value) {
     assertObject(value, "REMOTE_RELEASE_INVALID", "A release must be an object.");
-    const { flowId, version, title, summary, tags = [], definition, approved = true } = value;
-    if (!flowIdPattern.test(flowId) || !versionPattern.test(version) || typeof title !== "string" || typeof summary !== "string" || !Array.isArray(tags) || !approved) {
+    const { flowId, version, title, summary, tags = [], definition, approved } = value;
+    if (!flowIdPattern.test(flowId) || !versionPattern.test(version) || typeof title !== "string" || typeof summary !== "string" || !Array.isArray(tags) || approved !== true) {
       fail("REMOTE_RELEASE_INVALID", "The release is invalid or unapproved.");
     }
     if (title.length > 160 || summary.length > 500 || tags.some((tag) => typeof tag !== "string" || !identifierPattern.test(tag))) fail("REMOTE_RELEASE_INVALID", "The release metadata is invalid.");

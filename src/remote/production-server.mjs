@@ -39,15 +39,15 @@ function buildServer(auth) {
   const tool = (name, description, inputSchema, callback) => server.registerTool(name, { description, inputSchema }, async (input) => {
     const result = await callback(input);
     audit(auth.subject, name, "ok");
-    return { content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result };
+    return { content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: Array.isArray(result) ? { items: result } : result };
   });
-  tool("flow_recommend", "Recommend approved flow releases from a small task summary.", { taskSummary: z.string().min(1).max(500), tags: z.array(z.string()).max(20).optional() }, (input) => catalog.recommend(input));
-  tool("flow_get_definition", "Get one exact approved flow definition.", { flowId: z.string(), version: z.string() }, (input) => catalog.getDefinition(input.flowId, input.version));
-  tool("flow_record_run_evidence", "Record one bounded, redacted run evidence event.", { flowId: z.string(), version: z.string(), eventId: z.string(), runId: z.string(), nodeId: z.string(), status: z.enum(["completed", "failed", "blocked", "skipped"]), durationMs: z.number().int().nonnegative(), errorCode: z.string().optional(), counters: z.record(z.string(), z.number().int().nonnegative()).optional() }, (input) => catalog.recordEvidence(input));
-  tool("flow_list_runs", "List safe summaries for one approved flow version.", { flowId: z.string(), version: z.string() }, (input) => catalog.listRuns(input.flowId, input.version));
-  tool("flow_get_run_evidence", "Get redacted evidence for one approved flow run.", { flowId: z.string(), version: z.string(), runId: z.string() }, (input) => catalog.getEvidence(input.flowId, input.version, input.runId));
-  tool("flow_analyze_flow", "Analyze sufficient valid evidence for one approved flow version.", { flowId: z.string(), version: z.string() }, (input) => catalog.analyze(input.flowId, input.version));
-  tool("flow_record_improvement_proposal", "Create a pending-review proposal from a stored analysis.", { analysisId: z.string(), kind: z.enum(["flow-gap", "node-reliability", "validation-gap"]) }, (input) => catalog.recordProposal(input));
+  tool("flow_recommend", "Recommend approved flow releases from a small task summary.", z.object({ taskSummary: z.string().min(1).max(500), tags: z.array(z.string()).max(20).optional() }).strict(), (input) => catalog.recommend(input));
+  tool("flow_get_definition", "Get one exact approved flow definition.", z.object({ flowId: z.string(), version: z.string() }).strict(), (input) => catalog.getDefinition(input.flowId, input.version));
+  tool("flow_record_run_evidence", "Record one bounded, redacted run evidence event.", z.object({ flowId: z.string(), version: z.string(), eventId: z.string(), runId: z.string(), nodeId: z.string(), status: z.enum(["completed", "failed", "blocked", "skipped"]), durationMs: z.number().int().nonnegative(), errorCode: z.string().optional(), counters: z.record(z.string(), z.number().int().nonnegative()).optional() }).strict(), (input) => catalog.recordEvidence(input));
+  tool("flow_list_runs", "List safe summaries for one approved flow version.", z.object({ flowId: z.string(), version: z.string() }).strict(), (input) => catalog.listRuns(input.flowId, input.version));
+  tool("flow_get_run_evidence", "Get redacted evidence for one approved flow run.", z.object({ flowId: z.string(), version: z.string(), runId: z.string() }).strict(), (input) => catalog.getEvidence(input.flowId, input.version, input.runId));
+  tool("flow_analyze_flow", "Analyze sufficient valid evidence for one approved flow version.", z.object({ flowId: z.string(), version: z.string() }).strict(), (input) => catalog.analyze(input.flowId, input.version));
+  tool("flow_record_improvement_proposal", "Create a pending-review proposal from a stored analysis.", z.object({ analysisId: z.string(), kind: z.enum(["flow-gap", "node-reliability", "validation-gap"]) }).strict(), (input) => catalog.recordProposal(input));
   return server;
 }
 
