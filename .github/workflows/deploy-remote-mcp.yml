@@ -42,6 +42,7 @@ jobs:
           password: ${{ secrets.SSH_PASSWORD }}
           script: |
             install -d -m 700 /opt/flow-mcp
+            install -d -m 700 -o 1000 -g 1000 /opt/flow-mcp/data
             install -m 600 /tmp/flow-mcp-deploy/deploy/mcp/docker-compose.yml /opt/flow-mcp/docker-compose.yml
             sed 's/__FLOW_MCP_DOMAIN__/${{ vars.MCP_DOMAIN }}/g' /tmp/flow-mcp-deploy/deploy/mcp/Caddyfile > /tmp/flow-mcp.Caddyfile
             if ! grep -Fq '${{ vars.MCP_DOMAIN }} {' /etc/caddy/Caddyfile; then
@@ -50,6 +51,7 @@ jobs:
             cat > /opt/flow-mcp/config <<'EOF'
             MCP_ACCESS_TOKEN=${{ secrets.MCP_ACCESS_TOKEN }}
             MCP_CATALOG_FILE=/app/config/approved-releases.json
+            MCP_DATA_FILE=/app/data/remote-catalog-state.json
             MCP_ALLOWED_HOST=${{ vars.MCP_DOMAIN }}
             OAUTH_ISSUER=${{ vars.OAUTH_ISSUER }}
             OAUTH_RESOURCE=${{ vars.OAUTH_RESOURCE }}

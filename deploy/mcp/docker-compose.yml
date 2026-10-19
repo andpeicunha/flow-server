@@ -7,9 +7,8 @@ services:
       - "127.0.0.1:3422:3422"
     volumes:
       - ./approved-releases.json:/app/config/approved-releases.json:ro
+      - ./data:/app/data:rw
     read_only: true
-    tmpfs:
-      - /tmp
     security_opt:
       - no-new-privileges:true
     cap_drop:
