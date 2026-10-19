@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { spawn } from "node:child_process";
+import { mkdtemp, rm } from "node:fs/promises";
 import net from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 export const token = "test-token-that-is-long-enough-1234";
 export const fixtureCatalog = new URL("./fixtures/remote-approved-releases.json", import.meta.url).pathname;
@@ -32,10 +35,12 @@ export async function waitForHealth(endpoint, attempts = 50) {
 
 export async function startProductionServer(extraEnv = {}) {
   const port = await freePort();
+  const dataDirectory = await mkdtemp(join(tmpdir(), "flow-remote-state-"));
+  const dataFile = join(dataDirectory, "catalog-state.json");
   const output = [];
   const child = spawn(process.execPath, ["src/remote/production-server.mjs"], {
     cwd: new URL("..", import.meta.url),
-    env: { ...process.env, [accessTokenKey]: token, MCP_CATALOG_FILE: fixtureCatalog, PORT: String(port), ...extraEnv },
+    env: { ...process.env, [accessTokenKey]: token, MCP_CATALOG_FILE: fixtureCatalog, MCP_DATA_FILE: dataFile, PORT: String(port), ...extraEnv },
     stdio: ["ignore", "pipe", "pipe"]
   });
   child.stdout.on("data", (chunk) => output.push(chunk.toString()));
@@ -45,6 +50,7 @@ export async function startProductionServer(extraEnv = {}) {
     await waitForHealth(endpoint);
   } catch (error) {
     child.kill();
+    await rm(dataDirectory, { recursive: true, force: true });
     throw new Error(`${error.message}\n${output.join("")}`);
   }
   return {
@@ -55,6 +61,7 @@ export async function startProductionServer(extraEnv = {}) {
         child.kill("SIGTERM");
         await once(child, "exit");
       }
+      await rm(dataDirectory, { recursive: true, force: true });
     }
   };
 }

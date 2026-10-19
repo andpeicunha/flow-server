@@ -18,7 +18,7 @@ test("production Docker image starts with the safe fixture catalog", { skip: !en
   });
 
   await execFile("docker", ["build", "--tag", image, "--file", "deploy/mcp/Dockerfile", "."]);
-  await execFile("docker", ["run", "--detach", "--name", container, "--publish", "127.0.0.1::3422", "--env", `MCP_ACCESS_TOKEN=${token}`, "--env", "MCP_CATALOG_FILE=/app/config/approved-releases.json", "--volume", `${catalog}:/app/config/approved-releases.json:ro`, image]);
+  await execFile("docker", ["run", "--detach", "--name", container, "--publish", "127.0.0.1::3422", "--read-only", "--tmpfs", "/app/data:uid=1000,gid=1000,mode=0700", "--env", `MCP_ACCESS_TOKEN=${token}`, "--env", "MCP_CATALOG_FILE=/app/config/approved-releases.json", "--env", "MCP_DATA_FILE=/app/data/remote-catalog-state.json", "--volume", `${catalog}:/app/config/approved-releases.json:ro`, image]);
   const { stdout } = await execFile("docker", ["port", container, "3422/tcp"]);
   const address = stdout.trim().split("\n")[0];
   const endpoint = `http://${address}`;
@@ -26,4 +26,6 @@ test("production Docker image starts with the safe fixture catalog", { skip: !en
   await assertHealthyMcp(endpoint);
   const recommendation = await mcpRequest(endpoint, rpc("tools/call", { name: "flow_recommend", arguments: { taskSummary: "validate SDD", tags: ["sdd"] } }));
   assert.equal(recommendation.body.result.structuredContent.items[0].flowId, "sdd");
+  const evidence = await mcpRequest(endpoint, rpc("tools/call", { name: "flow_record_run_evidence", arguments: { flowId: "sdd", version: "2.0.0", eventId: "event-1", runId: "run-1", nodeId: "review", status: "completed", durationMs: 1 } }));
+  assert.equal(evidence.body.result.structuredContent.id.startsWith("evidence_"), true);
 });
