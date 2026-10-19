@@ -78,6 +78,34 @@ test("remote catalog persists only safe records across a restart", async () => {
   }
 });
 
+test("remote catalog restores an analysis after later failed evidence is saved", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "flow-remote-state-"));
+  const stateFile = join(directory, "catalog-state.json");
+  try {
+    const catalog = fixture({ stateStore: new FileCatalogStateStore({ filePath: stateFile }) });
+    catalog.recordEvidence({ flowId: "sdd", version: "2.0.0", eventId: "event-1", runId: "run-1", nodeId: "review", status: "failed", durationMs: 12, errorCode: "TEST_FAILED" });
+    catalog.recordEvidence({ flowId: "sdd", version: "2.0.0", eventId: "event-2", runId: "run-2", nodeId: "review", status: "blocked", durationMs: 20, errorCode: "MISSING_INPUT" });
+    const analysis = catalog.analyze("sdd", "2.0.0");
+    catalog.recordEvidence({ flowId: "sdd", version: "2.0.0", eventId: "event-3", runId: "run-3", nodeId: "review", status: "failed", durationMs: 8, errorCode: "TEST_FAILED" });
+
+    const restarted = fixture({ stateStore: new FileCatalogStateStore({ filePath: stateFile }) });
+    const proposal = restarted.recordProposal({ analysisId: analysis.id, kind: "node-reliability" });
+    assert.deepEqual(proposal.evidenceIds, analysis.evidenceIds);
+    assert.equal(restarted.getEvidence("sdd", "2.0.0", "run-3")[0].eventId, "event-3");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("MCP compose keeps only catalog data writable", async () => {
+  const compose = await readFile("deploy/mcp/docker-compose.yml", "utf8");
+  assert.match(compose, /\n    read_only: true\n/);
+  assert.match(compose, /\n      - \.\/data:\/app\/data:rw\n/);
+  assert.doesNotMatch(compose, /\n    tmpfs:/);
+  const writableMounts = [...compose.matchAll(/^      - .+:\/app\/[^:]+:rw$/gm)];
+  assert.equal(writableMounts.length, 1);
+});
+
 test("remote catalog requires explicit approval for immutable releases", () => {
   const release = { flowId: "sdd", version: "2.0.0", title: "SDD", summary: "Validate a software design document.", definition: { schemaVersion: "v1" } };
   assert.throws(() => new RemoteFlowCatalog({ releases: [release] }), (error) => error.code === "REMOTE_RELEASE_INVALID");

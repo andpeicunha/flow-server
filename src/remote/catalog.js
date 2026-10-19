@@ -282,8 +282,10 @@ export class RemoteFlowCatalog {
     assertExactKeys(analysis, new Set(["id", "flowId", "version", "evidenceIds", "findings", "createdAt"]), "REMOTE_CATALOG_STATE_INVALID", "The stored state is invalid.");
     safeStoredId(analysis.id, "analysis");
     safeTimestamp(analysis.createdAt, "REMOTE_CATALOG_STATE_INVALID");
+    if (!Array.isArray(analysis.evidenceIds)) fail("REMOTE_CATALOG_STATE_INVALID", "The stored state is invalid.");
     const failed = (this.evidenceByRelease.get(releaseKey(analysis.flowId, analysis.version)) || []).map((id) => this.evidence.get(id)).filter((item) => item.status === "failed" || item.status === "blocked");
-    if (!this.releases.has(releaseKey(analysis.flowId, analysis.version)) || !Array.isArray(analysis.evidenceIds) || JSON.stringify(analysis.evidenceIds) !== JSON.stringify(failed.map((item) => item.id)) || JSON.stringify(analysis.findings) !== JSON.stringify(analysisFindings) || this.analyses.has(analysis.id)) {
+    const analysisEvidenceIds = failed.slice(0, analysis.evidenceIds.length).map((item) => item.id);
+    if (!this.releases.has(releaseKey(analysis.flowId, analysis.version)) || analysis.evidenceIds.length === 0 || JSON.stringify(analysis.evidenceIds) !== JSON.stringify(analysisEvidenceIds) || JSON.stringify(analysis.findings) !== JSON.stringify(analysisFindings) || this.analyses.has(analysis.id)) {
       fail("REMOTE_CATALOG_STATE_INVALID", "The stored state is invalid.");
     }
     this.analyses.set(analysis.id, Object.freeze({ ...analysis, evidenceIds: Object.freeze([...analysis.evidenceIds]), findings: analysisFindings }));
