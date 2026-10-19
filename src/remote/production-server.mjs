@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import express from "express";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
+import { hostHeaderValidation } from "@modelcontextprotocol/sdk/server/middleware/hostHeaderValidation.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
 import { FileCatalogStateStore, RemoteFlowCatalog } from "./catalog.js";
@@ -40,7 +40,7 @@ function buildServer(auth) {
   const tool = (name, description, inputSchema, callback) => server.registerTool(name, { description, inputSchema }, async (input) => {
     const result = await callback(input);
     audit(auth.subject, name, "ok");
-    return { content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result };
+    return { content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: Array.isArray(result) ? { items: result } : result };
   });
   tool("flow_recommend", "Recommend approved flow releases from a small task summary.", z.object({ taskSummary: z.string().min(1).max(500), tags: z.array(z.string()).max(20).optional() }).strict(), (input) => catalog.recommend(input));
   tool("flow_get_definition", "Get one exact approved flow definition.", z.object({ flowId: z.string(), version: z.string() }).strict(), (input) => catalog.getDefinition(input.flowId, input.version));
@@ -65,15 +65,15 @@ async function authenticate(request, response, next) {
   }
 }
 
-const app = createMcpExpressApp({ host: "0.0.0.0", allowedHosts: ["localhost", "127.0.0.1", ...(process.env.MCP_ALLOWED_HOST ? [process.env.MCP_ALLOWED_HOST] : [])] });
-app.use(express.json({ limit: "64kb" }));
+const app = express();
+app.use(hostHeaderValidation(["localhost", "127.0.0.1", ...(process.env.MCP_ALLOWED_HOST ? [process.env.MCP_ALLOWED_HOST] : [])]));
 app.disable("x-powered-by");
 app.get("/healthz", (_request, response) => response.status(200).json({ status: "ok" }));
 if (oauth) {
   const metadata = protectedResourceMetadata(oauth);
   app.get(["/.well-known/oauth-protected-resource", new URL(metadataUrl(oauth.resource)).pathname], (_request, response) => response.status(200).json(metadata));
 }
-app.post("/mcp", authenticate, async (request, response) => {
+app.post("/mcp", express.json({ limit: "64kb" }), authenticate, async (request, response) => {
   const server = buildServer(request.auth);
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   try {
@@ -85,6 +85,10 @@ app.post("/mcp", authenticate, async (request, response) => {
   } finally {
     response.on("close", () => Promise.allSettled([transport.close(), server.close()]));
   }
+});
+app.use((error, _request, response, _next) => {
+  const status = error?.status === 413 ? 413 : 400;
+  response.status(status).json({ error: status === 413 ? "Request body is too large." : "Invalid JSON request." });
 });
 
 app.listen(process.env.PORT ?? 3422, "0.0.0.0", () => console.log("flow remote MCP started"));

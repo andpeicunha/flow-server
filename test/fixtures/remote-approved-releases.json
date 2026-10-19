@@ -1,0 +1,16 @@
+{
+  "releases": [
+    {
+      "flowId": "sdd",
+      "version": "2.0.0",
+      "title": "SDD validation",
+      "summary": "Validate a software design document.",
+      "tags": ["sdd", "validate"],
+      "approved": true,
+      "definition": {
+        "schemaVersion": "v1",
+        "nodes": [{ "id": "review" }]
+      }
+    }
+  ]
+}

@@ -30,6 +30,7 @@
   },
   "scripts": {
     "test": "node --test",
+    "test:container": "FLOW_MCP_TEST_CONTAINER=1 node --test test/production-container.test.mjs",
     "check:public": "node scripts/check-public-artifact.mjs"
   },
   "engines": {
