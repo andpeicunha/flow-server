@@ -1,6 +1,7 @@
 # Keep the real values only on the VPS or in GitHub environment secrets.
 MCP_ACCESS_TOKEN=
 MCP_CATALOG_FILE=/app/config/approved-releases.json
+MCP_DATA_FILE=/app/data/remote-catalog-state.json
 MCP_ALLOWED_HOST=flow-mcp.example.com
 OAUTH_ISSUER=
 OAUTH_RESOURCE=https://flow-mcp.example.com/mcp

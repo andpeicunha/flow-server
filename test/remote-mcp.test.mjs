@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { join } from "node:path";
 import test from "node:test";
-import { RemoteFlowCatalog, contentHash } from "../src/remote/catalog.js";
+import { tmpdir } from "node:os";
+import { FileCatalogStateStore, RemoteFlowCatalog, contentHash } from "../src/remote/catalog.js";
 import { loadRemoteReleases } from "../src/remote/release-file.js";
 import { callRemoteTool, handleRemoteRequest, remoteTools } from "../src/mcp/remote-server.js";
 import { createRemoteMcpHttpServer } from "../src/mcp/remote-http-server.js";
 
-function fixture() {
+function fixture(options = {}) {
   let next = 0;
   return new RemoteFlowCatalog({
     createId: () => `id${++next}`,
@@ -16,8 +20,10 @@ function fixture() {
       title: "SDD",
       summary: "Validate a software design document.",
       tags: ["sdd", "validate"],
+      approved: true,
       definition: { schemaVersion: "v1", nodes: [{ id: "review" }] }
-    }]
+    }],
+    ...options
   });
 }
 
@@ -40,6 +46,42 @@ test("remote catalog rejects unsafe evidence and stores safe evidence only", () 
   assert.deepEqual(evidence, { id: "evidence_id1", recordedAt: "2026-10-15T12:00:00.000Z" });
   assert.throws(() => catalog.recordEvidence({ flowId: "sdd", version: "2.0.0", eventId: "event-1", runId: "run-2", nodeId: "review", status: "completed", durationMs: 1 }), (error) => error.code === "REMOTE_EVIDENCE_DUPLICATE");
   assert.throws(() => catalog.recordEvidence({ flowId: "sdd", version: "2.0.0", eventId: "event-2", runId: "run-1", nodeId: "review", status: "completed", durationMs: 1 }), (error) => error.code === "REMOTE_EVIDENCE_INVALID");
+});
+
+test("remote catalog persists only safe records across a restart", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "flow-remote-state-"));
+  const stateFile = join(directory, "catalog-state.json");
+  const stateStore = new FileCatalogStateStore({ filePath: stateFile });
+  try {
+    const catalog = fixture({ stateStore });
+    assert.throws(() => catalog.recordEvidence({ flowId: "sdd", version: "2.0.0", eventId: "event-unsafe", runId: "run-unsafe", nodeId: "review", status: "failed", durationMs: 1, workspace: "/private" }), (error) => error.code === "REMOTE_EVIDENCE_INVALID");
+    assert.equal(existsSync(stateFile), false);
+    const first = catalog.recordEvidence({ flowId: "sdd", version: "2.0.0", eventId: "event-1", runId: "run-1", nodeId: "review", status: "failed", durationMs: 12, errorCode: "TEST_FAILED" });
+    catalog.recordEvidence({ flowId: "sdd", version: "2.0.0", eventId: "event-2", runId: "run-2", nodeId: "review", status: "blocked", durationMs: 20, errorCode: "MISSING_INPUT" });
+    const analysis = catalog.analyze("sdd", "2.0.0");
+    const proposal = catalog.recordProposal({ analysisId: analysis.id, kind: "node-reliability" });
+    const document = JSON.parse(await readFile(stateFile, "utf8"));
+    assert.deepEqual(Object.keys(document).sort(), ["analyses", "evidence", "proposals", "version"]);
+    assert.equal(JSON.stringify(document).includes("workspace"), false);
+    assert.equal(document.evidence.some((item) => item.eventId === "event-unsafe"), false);
+    assert.equal(document.proposals[0].status, "pending_review");
+    assert.throws(() => catalog.recordEvidence({ flowId: "sdd", version: "2.0.0", eventId: "event-1", runId: "run-3", nodeId: "review", status: "completed", durationMs: 1 }), (error) => error.code === "REMOTE_EVIDENCE_DUPLICATE");
+
+    const restarted = fixture({ stateStore: new FileCatalogStateStore({ filePath: stateFile }) });
+    assert.deepEqual(restarted.getEvidence("sdd", "2.0.0", "run-1").map((item) => item.id), [first.id]);
+    assert.throws(() => restarted.recordEvidence({ flowId: "sdd", version: "2.0.0", eventId: "event-1", runId: "run-3", nodeId: "review", status: "completed", durationMs: 1 }), (error) => error.code === "REMOTE_EVIDENCE_DUPLICATE");
+    const restoredProposal = restarted.recordProposal({ analysisId: analysis.id, kind: "node-reliability" });
+    assert.equal(restoredProposal.status, "pending_review");
+    assert.equal(proposal.status, "pending_review");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("remote catalog requires explicit approval for immutable releases", () => {
+  const release = { flowId: "sdd", version: "2.0.0", title: "SDD", summary: "Validate a software design document.", definition: { schemaVersion: "v1" } };
+  assert.throws(() => new RemoteFlowCatalog({ releases: [release] }), (error) => error.code === "REMOTE_RELEASE_INVALID");
+  assert.throws(() => new RemoteFlowCatalog({ releases: [{ ...release, approved: false }] }), (error) => error.code === "REMOTE_RELEASE_INVALID");
 });
 
 test("analysis requires sufficient evidence and proposals remain pending review", () => {

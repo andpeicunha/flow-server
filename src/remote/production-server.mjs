@@ -4,20 +4,21 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
-import { RemoteFlowCatalog } from "./catalog.js";
+import { FileCatalogStateStore, RemoteFlowCatalog } from "./catalog.js";
 import { loadRemoteReleases } from "./release-file.js";
 import { authenticateBearer, challenge, metadataUrl, oauthConfig, protectedResourceMetadata } from "./auth.js";
 
 const config = requiredConfig();
 const oauth = oauthConfig(process.env);
-const catalog = new RemoteFlowCatalog({ releases: await loadRemoteReleases(config.catalogFile) });
+const catalog = new RemoteFlowCatalog({ releases: await loadRemoteReleases(config.catalogFile), stateStore: new FileCatalogStateStore({ filePath: config.dataFile }) });
 const requests = new Map();
 
 function requiredConfig() {
   const accessToken = process.env.MCP_ACCESS_TOKEN;
   const catalogFile = process.env.MCP_CATALOG_FILE;
-  if (!accessToken || accessToken.length < 16 || !catalogFile) throw new Error("MCP_ACCESS_TOKEN and MCP_CATALOG_FILE are required.");
-  return { accessToken, catalogFile };
+  const dataFile = process.env.MCP_DATA_FILE;
+  if (!accessToken || accessToken.length < 16 || !catalogFile || !dataFile) throw new Error("MCP_ACCESS_TOKEN, MCP_CATALOG_FILE, and MCP_DATA_FILE are required.");
+  return { accessToken, catalogFile, dataFile };
 }
 
 function audit(actor, action, status) {
@@ -41,13 +42,13 @@ function buildServer(auth) {
     audit(auth.subject, name, "ok");
     return { content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result };
   });
-  tool("flow_recommend", "Recommend approved flow releases from a small task summary.", { taskSummary: z.string().min(1).max(500), tags: z.array(z.string()).max(20).optional() }, (input) => catalog.recommend(input));
-  tool("flow_get_definition", "Get one exact approved flow definition.", { flowId: z.string(), version: z.string() }, (input) => catalog.getDefinition(input.flowId, input.version));
-  tool("flow_record_run_evidence", "Record one bounded, redacted run evidence event.", { flowId: z.string(), version: z.string(), eventId: z.string(), runId: z.string(), nodeId: z.string(), status: z.enum(["completed", "failed", "blocked", "skipped"]), durationMs: z.number().int().nonnegative(), errorCode: z.string().optional(), counters: z.record(z.string(), z.number().int().nonnegative()).optional() }, (input) => catalog.recordEvidence(input));
-  tool("flow_list_runs", "List safe summaries for one approved flow version.", { flowId: z.string(), version: z.string() }, (input) => catalog.listRuns(input.flowId, input.version));
-  tool("flow_get_run_evidence", "Get redacted evidence for one approved flow run.", { flowId: z.string(), version: z.string(), runId: z.string() }, (input) => catalog.getEvidence(input.flowId, input.version, input.runId));
-  tool("flow_analyze_flow", "Analyze sufficient valid evidence for one approved flow version.", { flowId: z.string(), version: z.string() }, (input) => catalog.analyze(input.flowId, input.version));
-  tool("flow_record_improvement_proposal", "Create a pending-review proposal from a stored analysis.", { analysisId: z.string(), kind: z.enum(["flow-gap", "node-reliability", "validation-gap"]) }, (input) => catalog.recordProposal(input));
+  tool("flow_recommend", "Recommend approved flow releases from a small task summary.", z.object({ taskSummary: z.string().min(1).max(500), tags: z.array(z.string()).max(20).optional() }).strict(), (input) => catalog.recommend(input));
+  tool("flow_get_definition", "Get one exact approved flow definition.", z.object({ flowId: z.string(), version: z.string() }).strict(), (input) => catalog.getDefinition(input.flowId, input.version));
+  tool("flow_record_run_evidence", "Record one bounded, redacted run evidence event.", z.object({ flowId: z.string(), version: z.string(), eventId: z.string(), runId: z.string(), nodeId: z.string(), status: z.enum(["completed", "failed", "blocked", "skipped"]), durationMs: z.number().int().nonnegative(), errorCode: z.string().optional(), counters: z.record(z.string(), z.number().int().nonnegative()).optional() }).strict(), (input) => catalog.recordEvidence(input));
+  tool("flow_list_runs", "List safe summaries for one approved flow version.", z.object({ flowId: z.string(), version: z.string() }).strict(), (input) => catalog.listRuns(input.flowId, input.version));
+  tool("flow_get_run_evidence", "Get redacted evidence for one approved flow run.", z.object({ flowId: z.string(), version: z.string(), runId: z.string() }).strict(), (input) => catalog.getEvidence(input.flowId, input.version, input.runId));
+  tool("flow_analyze_flow", "Analyze sufficient valid evidence for one approved flow version.", z.object({ flowId: z.string(), version: z.string() }).strict(), (input) => catalog.analyze(input.flowId, input.version));
+  tool("flow_record_improvement_proposal", "Create a pending-review proposal from a stored analysis.", z.object({ analysisId: z.string(), kind: z.enum(["flow-gap", "node-reliability", "validation-gap"]) }).strict(), (input) => catalog.recordProposal(input));
   return server;
 }
 

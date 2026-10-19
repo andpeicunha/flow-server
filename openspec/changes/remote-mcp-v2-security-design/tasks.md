@@ -30,6 +30,7 @@
 - [x] Add a remote catalog domain for recommendation and exact definition lookup.
 - [x] Add strict redacted-evidence validation and server-generated evidence IDs.
 - [x] Add safe run listing, evidence lookup, analysis, and `pending_review` proposals.
+- [x] Persist only validated evidence, analyses, and `pending_review` proposals in a configured dedicated data file.
 - [x] Add the separate `flow-remote-mcp` stdio entrypoint and bounded tools.
 - [x] Require a configured bearer token and keep it out of errors and logs.
 - [x] Add the authenticated HTTP MCP transport boundary without browser CORS access.
@@ -43,6 +44,7 @@
 - [x] Adicionar domínio de catálogo remoto para recomendação e busca exata de definição.
 - [x] Adicionar validação estrita de evidência redigida e IDs de evidência gerados pelo servidor.
 - [x] Adicionar listagem segura de runs, busca de evidência, análise e propostas `pending_review`.
+- [x] Persistir apenas evidência validada, análises e propostas `pending_review` em arquivo de dados dedicado configurado.
 - [x] Adicionar entrypoint stdio separado `flow-remote-mcp` e tools limitadas.
 - [x] Exigir bearer token configurado e mantê-lo fora de erros e logs.
 - [x] Adicionar limite de transporte HTTP MCP autenticado sem acesso CORS de navegador.

@@ -102,15 +102,21 @@ versioned-flow catalog and safe run-analysis tools. It cannot run agents, use a
 shell, access a workspace, or publish a flow.
 
 For local protocol development, create an explicit JSON catalog file with a
-`releases` array. Set its absolute path and a unique bearer token with at least
-16 characters, then start the stdio server:
+`releases` array. Each release must set `approved` to `true`. Set its absolute
+path and a unique bearer token with at least 16 characters, then start the
+stdio server:
 
 ```sh
 export FLOW_REMOTE_MCP_BEARER_TOKEN="replace-with-a-unique-development-token"
 export FLOW_REMOTE_MCP_CATALOG_FILE="/absolute/path/to/approved-releases.json"
+export FLOW_REMOTE_MCP_DATA_FILE="/absolute/path/to/remote-catalog-state.json"
 flow-remote-mcp
 ```
 
 The remote transport must pass this value as `Bearer <token>` in the MCP request
 authorization context. Do not put this token in a flow definition, prompt,
-repository, or log. A VPS deployment and WorkOS OAuth are not included yet.
+repository, or log. The data file stores only validated, redacted evidence,
+analyses, and `pending_review` proposals. It never stores release definitions,
+prompts, workspace paths, file bodies, tokens, secrets, or full agent output.
+Use a dedicated writable directory for this one file. The release file stays
+read-only. A VPS deployment and WorkOS OAuth are not included yet.
