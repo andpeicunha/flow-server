@@ -120,7 +120,190 @@ uma run ativa.
 - **WHEN** a flow file changes after a run has started
 - **THEN** the active run continues with its recorded definition and identity
 
+### Requirement: Agent workflow YAML preserves execution controls / YAML preserva controles dos agents
+
+**[us]** The loader SHALL accept the bounded v2 flow contract used by agent
+workflows, including agent, role, model, effort or variant, executor, Skills,
+constraints, prompt/input/output, dependencies, routing metadata, conditions,
+and stop rules. It SHALL normalize the existing `name`, `route`, and singular
+`stopWhen` forms. Unknown fields, invalid references, duplicate node IDs, and
+dependency cycles SHALL fail validation.
+
+**[pt]** O loader SHALL aceitar o contrato v2 limitado usado pelos workflows de
+agentes, incluindo agente, role, modelo, effort ou variant, executor, Skills,
+restrições, prompt/input/output, dependências, roteamento, condições e regras
+de parada. Ele SHALL normalizar as formas existentes `name`, `route` e
+`stopWhen` singular. Campos desconhecidos, referências inválidas, IDs de node
+duplicados e ciclos nas dependências SHALL falhar na validação.
+
+#### Scenario: Existing workflow YAML is loaded / YAML existente é carregado
+
+**[us]**
+
+- **WHEN** a configured source contains a valid existing agent workflow YAML
+- **THEN** listing and run creation preserve the configured agent, model,
+  effort/variant, Skills, prompt, dependencies, conditions, and stop rules
+
+**[pt]**
+
+- **WHEN** uma fonte configurada contém YAML válido no formato atual de workflow
+- **THEN** listagem e criação da run preservam agente, modelo, effort/variant,
+  Skills, prompt, dependências, condições e regras de parada
+
+### Requirement: Profile resolution asks only on uncertainty / Profile só pergunta quando há dúvida
+
+**[us]** Each local source MAY declare workspace roots. The runner SHALL select a
+profile automatically only for a unique most-specific workspace match and a
+unique explicit flow or a single routed flow match. Multiple routed candidates SHALL
+return `needs_confirmation` and SHALL NOT create a run. Duplicate flow IDs in
+different profiles SHALL remain isolated by profile ID.
+
+**[pt]** Cada fonte local MAY declarar raízes de workspace. O runner SHALL
+selecionar profile automaticamente somente com correspondência única de
+workspace mais específico e flow explícito ou roteado sem empate. Se faltar
+correspondência ou houver conflito, SHALL retornar `needs_confirmation` e SHALL
+NOT criar run. IDs iguais em profiles diferentes SHALL permanecer isolados pelo
+ID do profile.
+
+#### Scenario: Workspace and flow are trusted / Workspace e flow são confiáveis
+
+**[us]**
+
+- **WHEN** one profile uniquely owns the workspace and one explicit flow is
+  selected or only one flow matches routing terms
+- **THEN** the runner may start the run without an extra confirmation step
+
+**[pt]**
+
+- **WHEN** um profile é o único associado ao workspace e um flow explícito ou
+  uma regra de roteamento resolve sem empate
+- **THEN** o runner pode iniciar a run sem pedir confirmação extra
+
+#### Scenario: Workspace or flow is uncertain / Workspace ou flow é incerto
+
+**[us]**
+
+- **WHEN** no unique profile or flow can be resolved
+- **THEN** the runner returns candidate profiles/flows and does not create a run
+
+**[pt]**
+
+- **WHEN** não é possível resolver um único profile ou flow
+- **THEN** o runner retorna profiles/flows candidatos e não cria a run
+
+#### Scenario: Multiple flows match routing terms / Mais de um flow corresponde ao roteamento
+
+**[us]**
+
+- **WHEN** routing terms match more than one flow, regardless of priority
+- **THEN** the runner returns `needs_confirmation` with candidate flows and does
+  not create a run
+
+**[pt]**
+
+- **WHEN** os termos de roteamento correspondem a mais de um flow, mesmo com
+  prioridades diferentes
+- **THEN** o runner retorna `needs_confirmation` com os flows candidatos e não
+  cria uma run
+
+### Requirement: The scheduler honors node controls / O scheduler respeita controles dos nodes
+
+**[us]** `flow_next` SHALL return only nodes whose dependencies and conditions
+are satisfied, with the configured agent, model, effort/variant, executor,
+Skills, constraints, and rendered prompt. It SHALL record false conditional
+nodes as skipped. Missing condition output SHALL block scheduling. Stop rules
+SHALL return a stopped decision before any dependent node is offered. Skipped
+conditional branches SHALL satisfy dependency joins. Prompt rendering SHALL
+preserve `{{task}}`, `{{context}}` (completed node outputs), `{{lastAnswer}}`,
+and `{{step.<id>}}` behavior.
+
+**[pt]** `flow_next` SHALL retornar somente nodes com dependências e condições
+satisfeitas, incluindo agente, modelo, effort/variant, executor, Skills,
+restrições e prompt configurados. Nodes com condição falsa SHALL ser registrados
+como ignorados. Saída ausente para uma condição SHALL bloquear o scheduler.
+Regras de parada SHALL retornar decisão de parada antes de oferecer nodes
+dependentes. Branches condicionais ignorados SHALL satisfazer joins de
+dependências. A renderização deve preservar `{{task}}`, `{{context}}` (saídas
+concluídas), `{{lastAnswer}}` e `{{step.<id>}}`.
+
+#### Scenario: A node waits for its configured condition / Node aguarda a condição configurada
+
+**[us]**
+
+- **WHEN** a node condition references a prior node output that is not present
+- **THEN** `flow_next` returns a blocked decision and the service rejects a
+  checkpoint that attempts to bypass the condition
+
+**[pt]**
+
+- **WHEN** a condição de um node depende de uma saída anterior que ainda não
+  existe
+- **THEN** `flow_next` retorna bloqueio e o serviço rejeita receipt que tente
+  ignorar a condição
+
 **[pt]**
 
 - **WHEN** um arquivo de flow muda depois que uma run iniciou
 - **THEN** a run ativa continua com sua definição e identidade registradas
+
+### Requirement: Guided runs have a complete lifecycle / Runs guiadas têm lifecycle completo
+
+**[us]** The first `flow_next` SHALL start a created run. The scheduler SHALL
+mark a run completed when all required nodes are completed or skipped, and
+stopped when a stop rule matches. A paused run SHALL return no nodes and SHALL
+reject checkpoints until resumed. CLI and MCP SHALL expose pause, resume, stop,
+and fail actions.
+
+**[pt]** A primeira chamada a `flow_next` SHALL iniciar uma run criada. O
+scheduler SHALL marcar a run como concluída quando todos os nodes obrigatórios
+forem concluídos ou ignorados, e como parada quando uma regra de parada for
+acionada. Run pausada SHALL não retornar nodes e SHALL rejeitar checkpoints até
+ser retomada. CLI e MCP SHALL expor ações de pausa, retomada, parada e falha.
+
+#### Scenario: A run reaches done / A run chega ao fim
+
+**[us]**
+
+- **WHEN** every required node has a completed or scheduler-owned skipped receipt
+- **THEN** `flow_next` returns `done` and persists the run as completed
+
+**[pt]**
+
+- **WHEN** todos os nodes obrigatórios têm receipt concluído ou ignorado pelo scheduler
+- **THEN** `flow_next` retorna `done` e persiste a run como concluída
+
+#### Scenario: A paused run is held / Uma run pausada fica suspensa
+
+**[us]**
+
+- **WHEN** `flow_next` or a checkpoint is requested for a paused run
+- **THEN** no node is returned or recorded until the run is resumed
+
+**[pt]**
+
+- **WHEN** `flow_next` ou checkpoint é solicitado para uma run pausada
+- **THEN** nenhum node é retornado ou registrado até a retomada da run
+
+### Requirement: Run audit checks completion evidence / Auditoria da run valida evidências
+
+**[us]** A run audit SHALL return `passed` only when the run is completed and
+every node in its pinned definition has a completed or scheduler-owned skipped
+receipt. Active or stopped runs SHALL be reported as `incomplete`; failed runs
+or failed receipts SHALL be reported as `failed`.
+
+**[pt]** A auditoria SHALL retornar `passed` somente quando a run estiver
+concluída e todos os nodes da definição fixada tiverem receipt concluído ou
+ignorado pelo scheduler. Runs ativas ou paradas SHALL ser reportadas como
+`incomplete`; runs ou receipts com falha SHALL ser reportados como `failed`.
+
+#### Scenario: An unfinished run is audited / Uma run incompleta é auditada
+
+**[us]**
+
+- **WHEN** a run is active, stopped, or lacks node evidence
+- **THEN** the audit does not report `passed` and identifies missing evidence
+
+**[pt]**
+
+- **WHEN** a run está ativa, parada ou sem evidência de algum node
+- **THEN** a auditoria não retorna `passed` e identifica a evidência ausente

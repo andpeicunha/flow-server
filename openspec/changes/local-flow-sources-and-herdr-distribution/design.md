@@ -323,3 +323,73 @@ executar flows existentes.
 A implementação atual do MCP remoto continua no repositório, mas não é instalada,
 contatada ou exigida por este caminho local do produto. O trabalho de deploy na
 VPS fica pausado e pode voltar em uma change futura separada.
+
+## Private profiles and pre-run routing / Profiles privados e seleção antes da run
+
+**[us]** Each configured source ID is also a private profile namespace. A source
+may declare local `workspaceRoots`. The runner resolves a workspace only when
+one source has the unique most-specific matching root. Flow IDs may repeat in
+different profiles; every lookup, run, and review is scoped by the selected
+profile and source. No source wins because it was loaded last.
+
+Automatic selection is allowed only when the workspace maps to one profile and
+the request names a flow, or one routing rule wins by a unique priority and
+keyword match. Missing or conflicting profile/flow matches return
+`needs_confirmation`; no run is created. The developer's agent asks the user,
+then retries with the confirmed profile and flow. Profile labels and paths live
+only in the developer's local configuration and are never added to starter
+examples.
+
+**[pt]** Cada ID de fonte configurada também é um namespace privado de profile.
+Uma fonte pode declarar `workspaceRoots` locais. O runner resolve um workspace
+somente quando uma fonte tem a raiz correspondente mais específica, sem empate.
+IDs de flow podem se repetir em profiles diferentes; consultas, runs e reviews
+sempre usam o profile e a fonte selecionados. Nenhuma fonte prevalece por ter
+sido carregada por último.
+
+A seleção automática só ocorre quando o workspace aponta para um único profile
+e a solicitação informa o flow, ou quando exatamente um flow corresponde aos
+termos de roteamento. Prioridade não elimina outros candidatos. Se faltar contexto ou houver
+conflito, o runner retorna `needs_confirmation` e não cria a run. O agente do
+desenvolvedor pergunta ao usuário e tenta novamente com o profile e o flow
+confirmados. Nomes e paths de profiles ficam somente na configuração local e não
+entram nos exemplos do plugin.
+
+## Agent workflow YAML and node scheduling / YAML de workflow e execução de nodes
+
+**[us]** The v2 flow model accepts the existing agent workflow fields: agent,
+role, model, effort/variant, executor, Skills, constraints, prompt/input/output,
+dependencies, conditional `when`, routing metadata, and root stop rules. The
+loader normalizes the existing `name`, `route`, and singular `stopWhen` forms
+without editing user-owned YAML. Unknown fields, bad references, duplicate
+node IDs, cycles, and invalid limits fail closed.
+
+Each run pins the normalized flow definition, profile ID, source ID, content
+hash, and optional Git commit. `flow_next` evaluates dependencies, conditions,
+and stop rules, records conditionally skipped nodes, and returns only ready
+nodes with their configured agent/model/effort/executor/Skills/constraints and
+rendered prompt. The host agent delegates the returned node as configured and
+records its bounded structured output in the receipt for later conditions.
+Host adapters remain separately gated; selecting a flow does not grant runtime
+or shell access.
+
+**[pt]** O modelo v2 aceita os campos dos workflows de agentes atuais: agente,
+role, modelo, effort/variant, executor, Skills, restrições, prompt/input/output,
+dependências, condição `when`, regras de roteamento e regras globais de parada.
+O loader normaliza as formas existentes `name`, `route` e `stopWhen` singular
+sem editar YAML do usuário. Campos desconhecidos, referências inválidas, IDs
+duplicados, ciclos e limites inválidos falham fechados.
+
+Cada run fixa a definição normalizada, profile, fonte, hash e commit Git atual
+quando aplicável. O primeiro `flow_next` inicia a run; a última resposta útil
+marca-a como concluída, e uma regra de parada marca-a como interrompida. Runs
+pausadas não recebem nodes nem aceitam checkpoints. Branches condicionais
+ignorados satisfazem joins de dependências. Prompts preservam `{{task}}`,
+`{{context}}` com outputs concluídos, `{{lastAnswer}}` e `{{step.<id>}}`.
+`flow_next` avalia dependências, condições e regras de parada, registra nodes
+ignorados por condição e retorna somente os nodes prontos com agente, modelo,
+esforço, executor, Skills, restrições e prompt configurados. O agente
+orquestrador delega o node conforme essa configuração e registra a saída
+estruturada limitada no receipt para as condições seguintes. Adaptadores de
+runtime continuam protegidos por gates; escolher um flow não concede acesso ao
+shell ou ao runtime.

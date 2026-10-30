@@ -25,10 +25,11 @@ test("flow-mcp uses only the local service for guided runs and audits", async ()
   const context = await fixture();
   try {
     assert.deepEqual(await context.client.list(), { items: [], nextCursor: null });
-    const started = await context.client.startGuided({ flowId: "hello-flow", workspace: "/workspace", runtime: "codex" });
+    const started = await context.client.startGuided({ flowId: "hello-flow", workspace: "/workspace", runtime: "codex", task: "Keep the original task" });
     assert.equal(started.id, "run_mcp");
+    assert.equal((await context.client.inspect("run_mcp")).task, "Keep the original task");
     assert.equal((await context.client.inspect("run_mcp")).executionMode, "guided");
-    assert.equal((await context.client.audit("run_mcp")).result, "passed");
+    assert.equal((await context.client.audit("run_mcp")).result, "incomplete");
   } finally {
     await new Promise((resolve) => context.server.close(resolve));
     await rm(context.directory, { recursive: true, force: true });
@@ -36,10 +37,14 @@ test("flow-mcp uses only the local service for guided runs and audits", async ()
 });
 
 test("flow-mcp advertises a bounded tool set and fails unavailable actions closed", async () => {
-  assert.deepEqual(tools.map((tool) => tool.name), ["flow_list", "flow_inspect", "flow_start_guided", "flow_next", "flow_checkpoint", "flow_audit", "flow_open"]);
+  assert.deepEqual(tools.map((tool) => tool.name), ["flow_list", "flow_select", "flow_inspect", "flow_start_guided", "flow_next", "flow_lifecycle", "flow_checkpoint", "flow_audit", "flow_open"]);
   const initialized = await handleRequest({}, { method: "initialize" });
   assert.equal(initialized.serverInfo.name, "flow-mcp");
-  const unavailable = await callTool({}, "flow_next", { runId: "run_test" });
+  const next = await callTool({ next: async () => ({ status: "ready", nodes: [] }) }, "flow_next", { runId: "run_test" });
+  assert.equal(next.structuredContent.status, "ready");
+  const lifecycle = await callTool({ lifecycle: async (runId, action) => ({ runId, action }) }, "flow_lifecycle", { runId: "run_test", action: "pause" });
+  assert.deepEqual(lifecycle.structuredContent, { runId: "run_test", action: "pause" });
+  const unavailable = await callTool({}, "flow_open", { runId: "run_test" });
   assert.equal(unavailable.isError, true);
   assert.match(unavailable.content[0].text, /MCP_OPERATION_UNAVAILABLE/);
 });

@@ -23,9 +23,17 @@ For a non-default state directory:
 codex mcp add flow-server -- flow-mcp --state-dir /absolute/state-directory
 ```
 
-Restart the Codex session after adding the server. Prompts can then use
-`flow_list`, `flow_inspect`, `flow_start_guided`, `flow_checkpoint`, and
-`flow_audit` through the local MCP connection.
+Restart the Codex session after adding the server. Use `flow_select` before a
+run when the workspace or flow is not already known. A unique local workspace
+mapping and route can be trusted automatically; if selection is ambiguous, ask
+the developer and do not start a run yet.
 
-`flow_next` and `flow_open` are visible but fail closed until the local
-scheduler and optional viewer exist.
+Use `flow_list` to inspect flows in a profile, `flow_start_guided` to create a
+selected run. Pass the original task so it appears in node prompts. `flow_next`
+starts the run and returns ready nodes with their configured agent,
+model, effort, executor, Skills, constraints, and prompt. Record node outputs
+with `flow_checkpoint` so conditions and stop rules can be evaluated. Use
+`flow_lifecycle` to pause, resume, stop, or fail a run; completion is automatic.
+Use `flow_inspect` and `flow_audit` for run review. Audit reports `passed` only
+after a completed run has evidence for every required node. `flow_open` remains
+unavailable until the optional viewer is installed.

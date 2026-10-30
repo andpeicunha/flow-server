@@ -2,8 +2,9 @@ import { FlowError } from "../core/errors.js";
 import { isRfc3339DateTime, rfc3339TimeValue } from "../core/date-time.js";
 
 const flowIdPattern = /^[a-z][a-z0-9-]{0,62}$/;
+const profileIdPattern = /^[a-z][a-z0-9-]{0,62}$/;
 const hashPattern = /^[a-f0-9]{64}$/;
-const maxReviewNodes = 2048;
+const maxReviewNodes = 256;
 const maxReviewFindings = 8192;
 
 function round(value) {
@@ -38,21 +39,27 @@ export class RunReviewService {
   }
 
   async review(request = {}) {
-    const allowed = new Set(["flowId", "last", "since", "contentHash", "compareVersions"]);
+    const allowed = new Set(["flowId", "profileId", "last", "since", "contentHash", "compareVersions"]);
     if (!request || typeof request !== "object" || Array.isArray(request) || !Object.keys(request).every((key) => allowed.has(key))) throw new FlowError("INVALID_FLOW_REVIEW", "Flow review request contains unsupported fields.");
-    const { flowId, last = 20, since, contentHash, compareVersions = false } = request;
+    const { flowId, profileId, last = 20, since, contentHash, compareVersions = false } = request;
     if (!flowIdPattern.test(flowId ?? "")) throw new FlowError("INVALID_FLOW_REVIEW", "A valid flowId is required.");
+    if (profileId !== undefined && !profileIdPattern.test(profileId)) throw new FlowError("INVALID_FLOW_REVIEW", "profileId must be a valid local profile identifier.");
     if (!Number.isInteger(last) || last < 1 || last > 100) throw new FlowError("INVALID_FLOW_REVIEW", "last must be an integer from 1 to 100.");
     if (contentHash !== undefined && !hashPattern.test(contentHash)) throw new FlowError("INVALID_FLOW_REVIEW", "contentHash must be a SHA-256 hash.");
     if (compareVersions !== undefined && typeof compareVersions !== "boolean") throw new FlowError("INVALID_FLOW_REVIEW", "compareVersions must be a boolean.");
     if (since !== undefined && !isRfc3339DateTime(since)) throw new FlowError("INVALID_FLOW_REVIEW", "since must be an RFC 3339 date-time.");
     const sinceTime = since === undefined ? undefined : rfc3339TimeValue(since);
 
-    let selected = (await this.stateStore.listRuns())
+    const matchingRuns = (await this.stateStore.listRuns())
       .filter((run) => run.flowId === flowId)
       .filter((run) => ["stopped", "completed", "failed"].includes(run.status))
       .filter((run) => sinceTime === undefined || rfc3339TimeValue(run.createdAt) >= sinceTime)
-      .filter((run) => contentHash === undefined || run.flowContentHash === contentHash)
+      .filter((run) => contentHash === undefined || run.flowContentHash === contentHash);
+    const profileIds = [...new Set(matchingRuns.map((run) => run.profileId ?? "core"))];
+    if (!profileId && profileIds.length > 1) throw new FlowError("FLOW_PROFILE_REQUIRED", "The flow ID exists in multiple local profiles. Specify profileId to review only one.");
+    const resolvedProfileId = profileId ?? profileIds[0];
+    let selected = matchingRuns
+      .filter((run) => (run.profileId ?? "core") === resolvedProfileId)
       .slice(0, last);
     if (!selected.length) throw new FlowError("FLOW_REVIEW_EVIDENCE_NOT_FOUND", "No matching run evidence was found.");
     if (!compareVersions && contentHash === undefined) {
@@ -111,6 +118,7 @@ export class RunReviewService {
     const report = {
       schemaVersion: "v1",
       flowId,
+      ...(resolvedProfileId ? { profileId: resolvedProfileId } : {}),
       generatedAt: this.now(),
       anchorRunId: selected[0].id,
       compareVersions: Boolean(compareVersions),

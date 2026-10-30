@@ -26,6 +26,11 @@ async function loadDirectory(directory, fs, sourceId) {
     const { contentHash } = identifyFlowDocument(flow);
     flows.push({ flow, sourceId, contentHash });
   }
+  const ids = new Set();
+  for (const { flow } of flows) {
+    if (ids.has(flow.id)) throw new FlowError("FLOW_ID_COLLISION", `A flow source contains more than one definition for ${flow.id}.`);
+    ids.add(flow.id);
+  }
   return flows;
 }
 
@@ -61,7 +66,8 @@ export class FlowCatalog {
       if (!isWithin(root, canonicalProfile)) throw new FlowError("PROFILE_ESCAPE", "The selected profile resolves outside its authorized root.");
       loaded.push(...await loadDirectory(canonicalProfile, this.fs, `profile-${this.profileName}`));
     }
-    return [...loaded.reduce((flows, entry) => flows.set(entry.flow.id, entry), new Map()).values()];
+    if (this.profileName) return [...loaded.reduce((flows, entry) => flows.set(entry.flow.id, entry), new Map()).values()];
+    return loaded;
   }
 
   async list() {

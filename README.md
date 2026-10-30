@@ -80,9 +80,10 @@ The bridge does not launch Codex or Claude adapters.
 ## External flows and adapters
 
 External flows are opt-in. `FlowCatalog` accepts only directories that the
-caller explicitly configures. It never searches `$HOME`, and it accepts only
-canonical v1 JSON flow documents. Core flows load first, then external flows,
-then a selected profile; later sources replace matching flow IDs.
+caller explicitly configures. It never searches `$HOME`; it validates compact
+JSON flows and agent workflow YAML, including agent, model, effort, Skills,
+prompts, conditions, dependencies, and stop rules. Flows with the same ID stay
+separate in different profiles.
 
 Codex and Claude are separate runtime contracts. Both support guided mode only
 in this development build. Direct mode and adapter launch fail closed. No
@@ -101,7 +102,8 @@ Personal flows stay in explicitly configured local directories. A source may be
 `local` or a local `git` worktree owned by the developer. `flow-server` never
 searches `$HOME`, stores Git credentials, or requires a remote service.
 
-Create an owner-only JSON or restricted YAML configuration:
+Create an owner-only JSON or restricted YAML configuration. Use local workspace
+roots to associate repositories with private profiles:
 
 ```yaml
 schemaVersion: v1
@@ -109,6 +111,8 @@ sources:
   - id: personal
     mode: local
     path: /absolute/path/to/flows
+    workspaceRoots:
+      - /absolute/path/to/workspace
     sync:
       pull: confirm
       push: manual
@@ -126,6 +130,18 @@ Validate and record a changed flow without performing any Git mutation:
 flow-source validate /absolute/path/to/flow.yaml
 flow-source mark --config /absolute/path/to/sources.yaml --source personal --file /absolute/path/to/flow.yaml
 ```
+
+The runner selects a profile automatically only when one configured workspace
+root matches uniquely. It selects a flow automatically only from an explicit
+flow ID or when exactly one flow matches routing terms. Otherwise, `flow select` or MCP
+`flow_select` returns `needs_confirmation`; the agent must ask the developer
+before starting. `flow_next` then returns ready nodes with the exact configured
+agent, model, effort, executor, Skills, constraints, and prompt. The agent
+records bounded structured output in node receipts so later conditions can run.
+The first `flow_next` starts the run. It marks the run complete when all required
+nodes finish; `flow lifecycle <runId> pause|resume|stop|fail` controls an active run.
+`flow audit` reports `passed` only for a completed run with evidence for every
+required node.
 
 The installed `flow-source-management` Skill defines safe commit, push, pull,
 and rollback behavior. Pull always requires confirmation. The optional remote

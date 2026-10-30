@@ -26,7 +26,7 @@ export class FileStateStore {
 
   async writeReceipt(receipt) {
     assertRunId(receipt.runId);
-    if (typeof receipt.nodeId !== "string" || !/^[a-z][a-z0-9-]{0,62}$/.test(receipt.nodeId)) throw new TypeError("Invalid node id.");
+    if (typeof receipt.nodeId !== "string" || !/^[a-z][a-z0-9_-]{0,62}$/.test(receipt.nodeId)) throw new TypeError("Invalid node id.");
     await this.writeJson(join(this.runDirectory(receipt.runId), `receipt-${receipt.nodeId}.json`), receipt);
   }
 
@@ -53,7 +53,7 @@ export class FileStateStore {
     try {
       const entries = await this.fs.readdir(directory, { withFileTypes: true });
       const receipts = await Promise.all(entries
-        .filter((entry) => entry.isFile() && /^receipt-[a-z][a-z0-9-]{0,62}\.json$/.test(entry.name))
+        .filter((entry) => entry.isFile() && /^receipt-[a-z][a-z0-9_-]{0,62}\.json$/.test(entry.name))
         .map((entry) => this.readJson(join(directory, entry.name))));
       return receipts.sort((left, right) => left.nodeId.localeCompare(right.nodeId));
     } catch (error) {

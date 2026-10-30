@@ -9,6 +9,30 @@ Treat the configured local directory as the execution source of truth. Git is
 optional history and synchronization. Use the developer's existing Git and SSH
 setup. Never ask flow-server to store credentials.
 
+## Select and run a flow
+
+1. Resolve the target workspace from the current task. A configured
+   `workspaceRoots` match is the local source of truth for its private profile.
+2. Use `flow_select` with the workspace and task. Trust a unique profile match
+   and a unique flow match only. If routing terms match more than one flow,
+   ask which flow to use even when their priorities differ.
+3. If the result is `needs_confirmation`, present the candidate profiles or
+   flows and ask the developer which one to use. Never create the run while
+   selection is unresolved.
+4. Start with the selected `profileId`, `flowId`, and original task, then follow
+   `flow_next`. The task and prior completed node outputs render into prompts.
+   Preserve each node's configured agent, model, effort/variant, executor,
+   Skills, constraints, prompt, and output contract. Do not silently substitute
+   a model, agent, or Skill.
+5. Use the lifecycle controls to pause/resume, stop, or fail a run. The first
+   `flow_next` starts it, and the scheduler marks it complete when all required
+   nodes finish. A paused run cannot accept node checkpoints.
+6. Use `flow_audit` at completion. It must report `passed` and include evidence
+   for all required nodes before treating the run as successful.
+7. Record bounded structured node output in the receipt when later conditions
+   depend on it. Never copy private profile names or workspace paths into public
+   examples or plugin defaults.
+
 ## Resolve and validate
 
 1. Read the explicit source configuration. Do not search `$HOME` for flows or

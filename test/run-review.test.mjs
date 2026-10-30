@@ -66,6 +66,22 @@ test("flow review excludes active runs and applies version, date, and count filt
   }
 });
 
+test("flow review does not mix runs with the same flow ID from different profiles", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "flow-review-profiles-"));
+  try {
+    const store = new FileStateStore(directory);
+    await store.writeRun({ id: "run_profilea", flowId: "shared-flow", profileId: "profile-a", flowContentHash: hashA, status: "completed", createdAt: "2026-01-02T00:00:00.000Z" });
+    await store.writeRun({ id: "run_profileb", flowId: "shared-flow", profileId: "profile-b", flowContentHash: hashB, status: "completed", createdAt: "2026-01-01T00:00:00.000Z" });
+    const service = new RunReviewService({ stateStore: store });
+    await assert.rejects(service.review({ flowId: "shared-flow" }), (error) => error.code === "FLOW_PROFILE_REQUIRED");
+    const report = await service.review({ flowId: "shared-flow", profileId: "profile-a" });
+    assert.equal(report.profileId, "profile-a");
+    assert.deepEqual(report.runIds, ["run_profilea"]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("active checkpoint accepts passive signals but rejects signals that affect a run", async () => {
   const directory = await mkdtemp(join(tmpdir(), "flow-review-test-"));
   try {

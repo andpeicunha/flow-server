@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://flow-server.dev/contracts/v2/flow-document.schema.json",
+  "title": "Agent workflow v2 flow document",
+  "description": "The strict agent workflow contract. Legacy name-based YAML is accepted as migration input and normalized to v2.",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "id", "nodes"],
+      "properties": {
+        "schemaVersion": { "const": "v2" },
+        "id": { "$ref": "#/$defs/id" },
+        "name": { "type": "string", "maxLength": 160 },
+        "title": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "description": { "type": "string", "maxLength": 4000 },
+        "keepAwake": { "type": "string", "maxLength": 32 },
+        "route": { "$ref": "#/$defs/routing" },
+        "routing": { "$ref": "#/$defs/routing" },
+        "stopWhen": { "anyOf": [{ "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/stopRule" } }, { "$ref": "#/$defs/stopRule" }] },
+        "nodes": { "$ref": "#/$defs/nodes" }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "nodes"],
+      "properties": {
+        "name": { "$ref": "#/$defs/id" },
+        "id": { "$ref": "#/$defs/id" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "description": { "type": "string", "maxLength": 4000 },
+        "keepAwake": { "type": "string", "maxLength": 32 },
+        "route": { "$ref": "#/$defs/routing" },
+        "routing": { "$ref": "#/$defs/routing" },
+        "stopWhen": { "anyOf": [{ "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/stopRule" } }, { "$ref": "#/$defs/stopRule" }] },
+        "nodes": { "$ref": "#/$defs/nodes" }
+      }
+    }
+  ],
+  "$defs": {
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$" },
+    "nodeId": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,62}$" },
+    "jsonScalar": { "anyOf": [{ "type": "string" }, { "type": "number" }, { "type": "boolean" }] },
+    "nodes": { "type": "array", "minItems": 1, "maxItems": 256, "items": { "$ref": "#/$defs/node" } },
+    "routing": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "when": { "$ref": "#/$defs/stringList" },
+        "avoid": { "$ref": "#/$defs/stringList" },
+        "priority": { "type": "integer", "minimum": 0, "maximum": 1000 }
+      }
+    },
+    "stringList": { "type": "array", "maxItems": 128, "items": { "type": "string", "minLength": 1, "maxLength": 4096 } },
+    "condition": {
+      "type": "object", "additionalProperties": false,
+      "required": ["step", "jsonPath"],
+      "properties": {
+        "step": { "$ref": "#/$defs/nodeId" }, "jsonPath": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "equals": { "$ref": "#/$defs/jsonScalar" }, "notEquals": { "$ref": "#/$defs/jsonScalar" },
+        "in": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/jsonScalar" } },
+        "notIn": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/jsonScalar" } }
+      },
+      "anyOf": [
+        { "required": ["equals"], "properties": { "equals": { "$ref": "#/$defs/jsonScalar" } } },
+        { "required": ["notEquals"], "properties": { "notEquals": { "$ref": "#/$defs/jsonScalar" } } },
+        { "required": ["in"], "properties": { "in": { "type": "array" } } },
+        { "required": ["notIn"], "properties": { "notIn": { "type": "array" } } }
+      ]
+    },
+    "stopRule": {
+      "type": "object", "additionalProperties": false,
+      "required": ["step", "jsonPath", "status", "next"],
+      "properties": {
+        "step": { "$ref": "#/$defs/nodeId" }, "jsonPath": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "equals": { "$ref": "#/$defs/jsonScalar" }, "notEquals": { "$ref": "#/$defs/jsonScalar" },
+        "in": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/jsonScalar" } },
+        "notIn": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/jsonScalar" } },
+        "status": { "type": "string", "minLength": 1, "maxLength": 128 }, "next": { "type": "string", "minLength": 1, "maxLength": 1000 }
+      },
+      "anyOf": [
+        { "required": ["equals"], "properties": { "equals": { "$ref": "#/$defs/jsonScalar" } } },
+        { "required": ["notEquals"], "properties": { "notEquals": { "$ref": "#/$defs/jsonScalar" } } },
+        { "required": ["in"], "properties": { "in": { "type": "array" } } },
+        { "required": ["notIn"], "properties": { "notIn": { "type": "array" } } }
+      ]
+    },
+    "node": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": { "$ref": "#/$defs/nodeId" }, "title": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "after": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/nodeId" } },
+        "dependsOn": { "type": "array", "uniqueItems": true, "items": { "$ref": "#/$defs/nodeId" } },
+        "agent": { "type": "string", "maxLength": 4096 }, "role": { "type": "string", "maxLength": 4096 },
+        "model": { "type": "string", "maxLength": 4096 }, "effort": { "type": "string", "maxLength": 4096 },
+        "variant": { "type": "string", "maxLength": 4096 }, "executor": { "type": "string", "maxLength": 4096 },
+        "skills": { "$ref": "#/$defs/stringList" }, "constraints": { "$ref": "#/$defs/stringList" },
+        "prompt": { "type": "string", "maxLength": 65536 }, "input": { "type": "string", "maxLength": 65536 },
+        "output": { "type": "string", "maxLength": 4096 }, "when": { "$ref": "#/$defs/condition" },
+        "evidencePolicy": { "type": "string", "maxLength": 4096 }, "timeout": { "type": "integer", "minimum": 1, "maximum": 604800 },
+        "retry": { "type": "integer", "minimum": 0, "maximum": 10 }, "parallelSafe": { "type": "boolean" }
+      },
+      "not": { "type": "object", "properties": { "after": {}, "dependsOn": {} }, "required": ["after", "dependsOn"] }
+    }
+  }
+}

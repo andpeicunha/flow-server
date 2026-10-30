@@ -18,10 +18,11 @@ test("source configuration supports local and git modes without credentials", ()
     schemaVersion: "v1",
     sources: [
       { id: "local", mode: "local", path: "/flows/local", sync: { pull: "confirm", push: "manual" } },
-      { id: "personal", mode: "git", path: "/flows/personal", remote: "origin", branch: "main", sync: { pull: "confirm", push: "after-validation" } }
+      { id: "personal", mode: "git", path: "/flows/personal", remote: "origin", branch: "main", workspaceRoots: ["/work/projects"], sync: { pull: "confirm", push: "after-validation" } }
     ]
   });
   assert.equal(config.sources[1].sync.push, "after-validation");
+  assert.deepEqual(config.sources[1].workspaceRoots, ["/work/projects"]);
   assert.throws(() => validateFlowSourceConfig({ schemaVersion: "v1", sources: [{ id: "bad", mode: "local", path: "relative", sync: { pull: "auto", push: "manual" } }] }), { code: "INVALID_FLOW_SOURCE_CONFIG" });
   assert.throws(() => validateFlowSourceConfig({ schemaVersion: "v1", sources: [{ id: "bad", mode: "git", path: "/flows", sync: { pull: "confirm", push: "force" }, token: "secret" }] }), { code: "INVALID_FLOW_SOURCE_CONFIG" });
 });
@@ -60,6 +61,19 @@ test("restricted YAML and JSON produce the same canonical identity", () => {
   assert.equal(identifyFlowDocument(fromYaml).contentHash, identifyFlowDocument(fromJson).contentHash);
 });
 
+test("legacy agent workflow YAML preserves routing, model, skills, conditions, and stop rules", () => {
+  const yaml = `name: sample-workflow\ndescription: A private local workflow\nroute:\n  when: [review, change]\n  avoid: [bug]\n  priority: 30\nstopWhen:\n  step: intake\n  jsonPath: decision\n  notEquals: ready\n  status: needs_confirmation\n  next: ask the developer\nnodes:\n  - id: intake\n    agent: explorer\n    model: provider/model-name\n    variant: low\n    executor: cli-session\n    skills: [local-skill]\n    output: Return a decision\n    prompt: 'Task: {{task}}'\n  - id: work_node\n    after: [intake]\n    agent: builder\n    model: provider/model-name\n    effort: medium\n    constraints: [stay in scope]\n    when: { step: intake, jsonPath: decision, in: [ready, true] }\n    prompt: Implement only the approved work\n`;
+  const parsed = parseFlowDocument(yaml, { format: "yaml" });
+  assert.equal(parsed.schemaVersion, "v2");
+  assert.equal(parsed.id, "sample-workflow");
+  assert.equal(parsed.routing.priority, 30);
+  assert.equal(parsed.nodes[1].agent, "builder");
+  assert.equal(parsed.nodes[1].model, "provider/model-name");
+  assert.deepEqual(parsed.nodes[1].skills ?? [], []);
+  assert.equal(parsed.nodes[1].when.step, "intake");
+  assert.deepEqual(parsed.stopWhen, [{ step: "intake", jsonPath: "decision", notEquals: "ready", status: "needs_confirmation", next: "ask the developer" }]);
+});
+
 test("restricted YAML rejects aliases, merge keys, duplicates, unknown fields, and invalid dependencies", () => {
   const documents = [
     "schemaVersion: v1\nid: alias-flow\nnodes:\n  - &node { id: work, title: Work }\n  - *node\n",
@@ -88,26 +102,89 @@ test("flow source service exposes non-secret status and resolves canonical run i
   const directory = await mkdtemp(join(tmpdir(), "flow-source-service-"));
   try {
     const flows = join(directory, "flows");
+    const workspace = join(directory, "project");
     await mkdir(flows);
+    await mkdir(workspace);
     await writeFile(join(flows, "hello.yaml"), "schemaVersion: v1\nid: hello-flow\ntitle: Hello\nnodes: [{ id: work, title: Work }]\n");
     const configPath = join(directory, "sources.json");
-    await writeFile(configPath, JSON.stringify({ schemaVersion: "v1", sources: [{ id: "personal", mode: "git", path: flows, remote: "origin", branch: "main", sync: { pull: "confirm", push: "manual" } }] }));
-    const service = new FlowSourceService({ configPath, gitIdentity: async () => ({ commit: "a".repeat(40), branch: "main" }) });
+    await writeFile(configPath, JSON.stringify({ schemaVersion: "v1", sources: [{ id: "personal", mode: "git", path: flows, remote: "origin", branch: "main", workspaceRoots: [workspace], sync: { pull: "confirm", push: "manual" } }] }));
+    let commit = "a".repeat(40);
+    const service = new FlowSourceService({ configPath, gitIdentity: async () => ({ commit, branch: "main" }) });
     await service.initialize();
-    assert.deepEqual(service.status(), [{ id: "personal", mode: "git", path: flows, remote: "origin", branch: "main", currentBranch: "main", gitCommit: "a".repeat(40), sync: { pull: "confirm", push: "manual" } }]);
+    assert.deepEqual(await service.status(), [{ id: "personal", mode: "git", path: flows, workspaceRoots: [workspace], remote: "origin", branch: "main", currentBranch: "main", gitCommit: "a".repeat(40), sync: { pull: "confirm", push: "manual" } }]);
     const listed = await service.list();
     assert.equal(listed[0].sourceId, "personal");
+    assert.equal(listed[0].profileId, "personal");
     assert.match(listed[0].contentHash, /^[a-f0-9]{64}$/);
     const writes = [];
-    const runService = new RunService({ stateStore: { writeRun: async (run) => writes.push(run) }, flowResolver: (id) => service.resolve(id), createId: () => "run_identity", now: () => "2026-01-01T00:00:00.000Z" });
-    const run = await runService.create({ flowId: "hello-flow", workspace: "/workspace", runtime: "codex", executionMode: "guided" });
+    const runService = new RunService({ stateStore: { writeRun: async (run) => writes.push(run) }, flowResolver: (selection) => service.resolve(selection), createId: () => "run_identity", now: () => "2026-01-01T00:00:00.000Z" });
+    const run = await runService.create({ flowId: "hello-flow", workspace, runtime: "codex", executionMode: "guided" });
+    assert.equal(run.profileId, "personal");
     assert.equal(run.flowSourceId, "personal");
     assert.equal(run.flowContentHash, listed[0].contentHash);
     assert.equal(run.flowGitCommit, "a".repeat(40));
-    assert.equal(writes[0].workspace, "/workspace");
+    assert.equal(writes[0].workspace, workspace);
     assert.equal(writes[0].flowDefinition.id, "hello-flow");
     assert.equal(run.flowDefinition, undefined);
-    await assert.rejects(service.resolve("missing"), { code: "FLOW_NOT_FOUND" });
+    await assert.rejects(service.resolve("missing", { profileId: "personal" }), { code: "FLOW_NOT_FOUND" });
+    assert.deepEqual(await service.selectFlow({ workspace, flowId: "hello-flow" }).then(({ decision, profileId }) => ({ decision, profileId })), { decision: "ready", profileId: "personal" });
+    assert.equal((await service.selectFlow({ workspace: directory, flowId: "hello-flow" })).decision, "needs_confirmation");
+    commit = "b".repeat(40);
+    assert.equal((await service.list())[0].gitCommit, commit);
+    assert.equal((await service.status())[0].gitCommit, commit);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("profiles isolate duplicate flow IDs and ask when a workspace is not mapped", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "flow-profile-routing-"));
+  try {
+    const projectOne = join(directory, "project-one");
+    const projectTwo = join(directory, "project-two");
+    const sourceOne = join(directory, "flows-one");
+    const sourceTwo = join(directory, "flows-two");
+    await Promise.all([mkdir(projectOne), mkdir(projectTwo), mkdir(sourceOne), mkdir(sourceTwo)]);
+    const definition = (title) => `name: shared-flow\ndescription: ${title}\nrouting: { when: [feature], priority: 10 }\nnodes: [{ id: work_node, agent: builder, model: provider/model, skills: [review], prompt: 'Do {{task}}' }]\n`;
+    await writeFile(join(sourceOne, "shared.yaml"), definition("Workspace one"));
+    await writeFile(join(sourceTwo, "shared.yaml"), definition("Workspace two"));
+    const configPath = join(directory, "sources.json");
+    await writeFile(configPath, JSON.stringify({ schemaVersion: "v1", sources: [
+      { id: "profile-one", mode: "local", path: sourceOne, workspaceRoots: [projectOne], sync: { pull: "confirm", push: "manual" } },
+      { id: "profile-two", mode: "local", path: sourceTwo, workspaceRoots: [projectTwo], sync: { pull: "confirm", push: "manual" } }
+    ] }));
+    const service = new FlowSourceService({ configPath });
+    await service.initialize();
+    const listed = await service.list();
+    assert.equal(listed.length, 2);
+    assert.deepEqual(listed.map(({ profileId }) => profileId), ["profile-one", "profile-two"]);
+    const routed = await service.selectFlow({ workspace: projectTwo, task: "implement a feature" });
+    assert.equal(routed.decision, "ready");
+    assert.equal(routed.profileId, "profile-two");
+    const unknown = await service.selectFlow({ workspace: directory, task: "implement a feature" });
+    assert.equal(unknown.decision, "needs_confirmation");
+    assert.equal(unknown.reason, "PROFILE_UNRESOLVED");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("flow routing asks the developer when multiple flows match the task", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "flow-ambiguous-routing-"));
+  try {
+    const workspace = join(directory, "project");
+    const flows = join(directory, "flows");
+    await Promise.all([mkdir(workspace), mkdir(flows)]);
+    await writeFile(join(flows, "sdd.yaml"), "name: sdd\nrouting: { when: [api], priority: 110 }\nnodes: [{ id: work }]\n");
+    await writeFile(join(flows, "pr-review.yaml"), "name: pr-review\nrouting: { when: [review], priority: 30 }\nnodes: [{ id: work }]\n");
+    const configPath = join(directory, "sources.json");
+    await writeFile(configPath, JSON.stringify({ schemaVersion: "v1", sources: [{ id: "profile", mode: "local", path: flows, workspaceRoots: [workspace], sync: { pull: "confirm", push: "manual" } }] }));
+    const service = new FlowSourceService({ configPath });
+    await service.initialize();
+    const selection = await service.selectFlow({ workspace, task: "review API" });
+    assert.equal(selection.decision, "needs_confirmation");
+    assert.equal(selection.reason, "FLOW_AMBIGUOUS");
+    assert.deepEqual(selection.flows.map(({ id }) => id), ["sdd", "pr-review"]);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

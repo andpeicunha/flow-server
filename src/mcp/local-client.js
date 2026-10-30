@@ -50,11 +50,14 @@ export class LocalFlowClient {
     return result;
   }
 
-  list() { return this.request("/v1/flows"); }
+  list(profileId) { return this.request(`/v1/flows${profileId ? `?profileId=${encodeURIComponent(profileId)}` : ""}`); }
+  selectFlow(selection) { return this.request("/v1/flow-selection", { method: "POST", mutate: true, body: selection }); }
   inspect(runId) { return this.request(`/v1/runs/${encodeURIComponent(runId)}`); }
   audit(runId) { return this.request(`/v1/runs/${encodeURIComponent(runId)}/audit`); }
-  startGuided({ flowId, workspace, runtime }) {
-    return this.request("/v1/runs", { method: "POST", mutate: true, body: { flowId, workspace, runtime, executionMode: "guided" } });
+  next(runId) { return this.request(`/v1/runs/${encodeURIComponent(runId)}/next`, { method: "POST", mutate: true, body: {} }); }
+  lifecycle(runId, action) { return this.request(`/v1/runs/${encodeURIComponent(runId)}/lifecycle`, { method: "POST", mutate: true, body: { action } }); }
+  startGuided({ flowId, profileId, workspace, runtime, task }) {
+    return this.request("/v1/runs", { method: "POST", mutate: true, body: { flowId, ...(profileId ? { profileId } : {}), workspace, runtime, executionMode: "guided", ...(task !== undefined ? { task } : {}) } });
   }
   checkpoint(runId, receipt) {
     return this.request(`/v1/runs/${encodeURIComponent(runId)}/checkpoint`, { method: "POST", mutate: true, body: { receipt } });

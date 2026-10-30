@@ -19,13 +19,14 @@ export function validateFlowSourceConfig(value) {
 
   const ids = new Set();
   const sources = value.sources.map((source) => {
-    const allowed = new Set(["id", "mode", "path", "remote", "branch", "sync"]);
+    const allowed = new Set(["id", "mode", "path", "remote", "branch", "workspaceRoots", "sync"]);
     const validSync = source?.sync && typeof source.sync === "object" && !Array.isArray(source.sync)
       && exactKeys(source.sync, new Set(["pull", "push"]))
       && source.sync.pull === "confirm" && pushPolicies.has(source.sync.push);
     const valid = source && typeof source === "object" && !Array.isArray(source)
       && exactKeys(source, allowed) && identifier.test(source.id) && ["local", "git"].includes(source.mode)
       && typeof source.path === "string" && source.path.length <= 4096 && isAbsolute(source.path)
+      && (source.workspaceRoots === undefined || (Array.isArray(source.workspaceRoots) && source.workspaceRoots.length <= 64 && source.workspaceRoots.every((root) => typeof root === "string" && root.length > 0 && root.length <= 4096 && isAbsolute(root))))
       && validSync;
     if (!valid || ids.has(source?.id)) throw new FlowError("INVALID_FLOW_SOURCE_CONFIG", "Each flow source must have a unique ID, an absolute path, a mode, and safe sync policies.");
     if (source.mode === "local" && (source.remote !== undefined || source.branch !== undefined)) {
@@ -35,7 +36,7 @@ export function validateFlowSourceConfig(value) {
       throw new FlowError("INVALID_FLOW_SOURCE_CONFIG", "Git source remote or branch is invalid.");
     }
     ids.add(source.id);
-    return structuredClone(source);
+    return { ...structuredClone(source), workspaceRoots: [...(source.workspaceRoots ?? [])] };
   });
   return { schemaVersion: "v1", sources };
 }

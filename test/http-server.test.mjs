@@ -95,7 +95,7 @@ test("HTTP idempotency survives a new server instance and audit reflects stored 
     assert.equal((await replayed.json()).id, "run_test");
     await fetch(`${context.base}/v1/runs/run_test/checkpoint`, { method: "POST", headers: { ...headers, "idempotency-key": "failed-receipt-001" }, body: JSON.stringify({ receipt: { schemaVersion: "v1", runId: "run_test", nodeId: "verify", status: "failed", recordedAt: "2026-01-01T00:00:00.000Z" } }) });
     const audit = await fetch(`${context.base}/v1/runs/run_test/audit`);
-    assert.deepEqual(await audit.json(), { schemaVersion: "v1", runId: "run_test", result: "failed", findings: [{ code: "NODE_FAILED", nodeId: "verify" }] });
+    assert.deepEqual(await audit.json(), { schemaVersion: "v1", runId: "run_test", result: "failed", findings: [{ code: "NODE_FAILED", nodeId: "verify" }, { code: "FLOW_DEFINITION_MISSING" }, { code: "RUN_INCOMPLETE" }] });
   } finally {
     await new Promise((resolve) => context.server.close(resolve));
     await rm(context.directory, { recursive: true, force: true });
@@ -243,21 +243,29 @@ test("CLI starts, inspects, and stops a local service without adapters", async (
 
 test("flow CLI uses the local API and requires explicit direct-mode approval", async () => {
   const directory = await mkdtemp(join(tmpdir(), "flow-client-test-"));
+  const flows = join(directory, "flows");
+  const workspace = join(directory, "workspace");
+  const sourceConfig = join(directory, "sources.json");
   const port = 47995;
-  const host = new ServiceHost({ stateDir: directory, port });
+  await mkdir(flows);
+  await mkdir(workspace);
+  await writeFile(join(flows, "hello.yaml"), "schemaVersion: v1\nid: hello-flow\ntitle: Hello\nnodes: [{ id: work, title: Work }]\n");
+  await writeFile(sourceConfig, JSON.stringify({ schemaVersion: "v1", sources: [{ id: "personal", mode: "local", path: flows, workspaceRoots: [workspace], sync: { pull: "confirm", push: "manual" } }] }));
+  const host = new ServiceHost({ stateDir: directory, sourceConfig, port });
   const withStateDir = (command, ...argumentsList) => [flowCli, command, "--state-dir", directory, ...argumentsList];
   try {
     await host.start();
     const listed = await execFile(process.execPath, withStateDir("list"));
     assert.deepEqual(JSON.parse(listed.stdout), { items: [], nextCursor: null });
-    await assert.rejects(execFile(process.execPath, withStateDir("start", "--flow", "hello-flow", "--workspace", "/workspace", "--runtime", "codex", "--mode", "direct")), /approve-host-adapter/);
-    const created = await execFile(process.execPath, withStateDir("start", "--flow", "hello-flow", "--workspace", "/workspace", "--runtime", "codex", "--mode", "guided"));
+    await assert.rejects(execFile(process.execPath, withStateDir("start", "--flow", "hello-flow", "--workspace", workspace, "--runtime", "codex", "--mode", "direct")), /approve-host-adapter/);
+    const created = await execFile(process.execPath, withStateDir("start", "--flow", "hello-flow", "--task", "Keep this task", "--workspace", workspace, "--runtime", "codex", "--mode", "guided"));
     const run = JSON.parse(created.stdout);
     assert.equal(run.status, "created");
+    assert.equal(run.task, "Keep this task");
     const inspected = await execFile(process.execPath, withStateDir("inspect", run.id));
     assert.equal(JSON.parse(inspected.stdout).id, run.id);
     const audit = await execFile(process.execPath, withStateDir("audit", run.id));
-    assert.equal(JSON.parse(audit.stdout).result, "passed");
+    assert.equal(JSON.parse(audit.stdout).result, "incomplete");
     await new FileStateStore(directory).writeRun({ ...run, status: "completed" });
     const review = await execFile(process.execPath, withStateDir("review", "hello-flow", "--last", "5"));
     assert.equal(JSON.parse(review.stdout).advisoryOnly, true);
@@ -270,12 +278,14 @@ test("flow CLI uses the local API and requires explicit direct-mode approval", a
 test("service loads an explicit local source and records its canonical identity", async () => {
   const directory = await mkdtemp(join(tmpdir(), "flow-source-http-test-"));
   const flows = join(directory, "flows");
+  const workspace = join(directory, "workspace");
   const state = join(directory, "state");
   const sourceConfig = join(directory, "sources.json");
   const port = 47996;
   await mkdir(flows);
+  await mkdir(workspace);
   await writeFile(join(flows, "hello.yaml"), "schemaVersion: v1\nid: hello-flow\ntitle: Hello\nnodes: [{ id: work, title: Work }]\n");
-  await writeFile(sourceConfig, JSON.stringify({ schemaVersion: "v1", sources: [{ id: "personal", mode: "local", path: flows, sync: { pull: "confirm", push: "manual" } }] }));
+  await writeFile(sourceConfig, JSON.stringify({ schemaVersion: "v1", sources: [{ id: "personal", mode: "local", path: flows, workspaceRoots: [workspace], sync: { pull: "confirm", push: "manual" } }] }));
   const host = new ServiceHost({ stateDir: state, sourceConfig, port, createRunService: (store, flowResolver) => new RunService({ stateStore: store, flowResolver, createId: () => "run_source", now: () => "2026-01-01T00:00:00.000Z" }) });
   try {
     await host.start();
@@ -283,9 +293,19 @@ test("service loads an explicit local source and records its canonical identity"
     assert.equal(listed.items[0].sourceId, "personal");
     assert.match(listed.items[0].contentHash, /^[a-f0-9]{64}$/);
     const token = (await readFile(join(state, "service.token"), "utf8")).trim();
-    const created = await fetch(`http://127.0.0.1:${port}/v1/runs`, { method: "POST", headers: { "content-type": "application/json", "x-flow-local-token": token, "idempotency-key": "source-run-key-001" }, body: JSON.stringify({ flowId: "hello-flow", workspace: "/workspace", runtime: "codex", executionMode: "guided" }) });
+    const selection = await fetch(`http://127.0.0.1:${port}/v1/flow-selection`, { method: "POST", headers: { "content-type": "application/json", "x-flow-local-token": token, "idempotency-key": "source-select-key-001" }, body: JSON.stringify({ flowId: "hello-flow", workspace }) });
+    const selected = await selection.json();
+    assert.equal(selected.decision, "ready");
+    assert.equal(selected.profileId, "personal");
+    const uncertainSelection = await fetch(`http://127.0.0.1:${port}/v1/flow-selection`, { method: "POST", headers: { "content-type": "application/json", "x-flow-local-token": token, "idempotency-key": "source-select-key-002" }, body: JSON.stringify({ flowId: "hello-flow", workspace: directory }) });
+    const uncertain = await uncertainSelection.json();
+    assert.equal(uncertain.decision, "needs_confirmation");
+    const refusedRun = await fetch(`http://127.0.0.1:${port}/v1/runs`, { method: "POST", headers: { "content-type": "application/json", "x-flow-local-token": token, "idempotency-key": "source-run-key-002" }, body: JSON.stringify({ flowId: "hello-flow", workspace: directory, runtime: "codex", executionMode: "guided" }) });
+    assert.equal(refusedRun.status, 400);
+    const created = await fetch(`http://127.0.0.1:${port}/v1/runs`, { method: "POST", headers: { "content-type": "application/json", "x-flow-local-token": token, "idempotency-key": "source-run-key-001" }, body: JSON.stringify({ flowId: "hello-flow", profileId: selected.profileId, workspace, runtime: "codex", executionMode: "guided" }) });
     const run = await created.json();
     assert.equal(run.flowSourceId, "personal");
+    assert.equal(run.profileId, "personal");
     assert.equal(run.flowContentHash, listed.items[0].contentHash);
     assert.equal(run.flowDefinition, undefined);
     assert.equal((await new FileStateStore(state).readRun("run_source")).flowDefinition.id, "hello-flow");

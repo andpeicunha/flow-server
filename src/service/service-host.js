@@ -25,7 +25,7 @@ export class ServiceHost {
     this.token = createToken(stateDir);
     this.flowSourceService = createFlowSourceService(sourceConfig);
     const stateStore = new FileStateStore(stateDir);
-    this.runService = createRunService(stateStore, sourceConfig ? (flowId) => this.flowSourceService.resolve(flowId) : undefined);
+    this.runService = createRunService(stateStore, (selection) => this.flowSourceService.resolve(selection.flowId, selection));
     this.runReviewService = createRunReviewService(stateStore);
     this.fs = fs;
     this.server = undefined;

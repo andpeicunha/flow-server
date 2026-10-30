@@ -139,3 +139,60 @@
   edição, validação, guided run e sincronização Git aprovada.
 - [x] Atualizar README e docs locais; marcar VPS e MCP remoto como adiados.
 - [x] Executar `npm test`, `npm run check:public` e validação OpenSpec estrita.
+
+## 6. Agent workflow v2 and private profile routing / Workflow de agents v2 e profiles locais
+
+**[us]**
+
+- [x] Accept and normalize existing agent workflow YAML fields without editing
+  private flow files.
+- [x] Add local workspace-root mappings and unique-match profile resolution.
+- [x] Scope same-named flows and run identities by private profile/source.
+- [x] Return a confirmation decision without creating a run when workspace or
+  flow resolution is ambiguous.
+- [x] Schedule ready nodes with their configured agents, models, effort,
+  executors, Skills, constraints, conditions, and stop rules.
+- [x] Add structured bounded node output to receipts for downstream conditions.
+- [x] Preserve task and completed-node context in rendered prompts.
+- [x] Treat conditional skips as satisfied dependencies at branch joins.
+- [x] Ask for confirmation when routing matches multiple flows, regardless of
+  priority.
+- [x] Complete run lifecycle through CLI, MCP, and the scheduler.
+- [x] Read the current Git identity when resolving a run.
+- [x] Compare string conditions and stop rules without case sensitivity.
+- [x] Ignore stop rules for intentionally skipped nodes.
+- [x] Report incomplete audits unless every required node has evidence.
+- [x] Refresh Git identity in source and flow listings.
+- [x] Update installed Skill and setup documentation with generic profile
+  mapping, selection, and node execution instructions.
+- [x] Run focused and full local validation; record any environment-blocked
+  checks.
+
+**[pt]**
+
+- [x] Aceitar e normalizar os campos dos workflows existentes sem editar flows
+  privados.
+- [x] Adicionar mapeamento local de workspace e resolução por correspondência
+  única de profile.
+- [x] Isolar flows homônimos e identidade de run por profile/fonte privada.
+- [x] Retornar pedido de confirmação sem criar run quando workspace ou flow
+  forem ambíguos.
+- [x] Agendar nodes prontos com agente, modelo, esforço, executor, Skills,
+  restrições, condições e regras de parada configurados.
+- [x] Adicionar saída estruturada e limitada nos receipts para condições
+  posteriores.
+- [x] Preservar task e contexto de nodes concluídos nos prompts renderizados.
+- [x] Tratar branches condicionais ignorados como dependências resolvidas em
+  joins.
+- [x] Pedir confirmação quando o roteamento corresponder a vários flows,
+  independentemente da prioridade.
+- [x] Completar o lifecycle da run pela CLI, MCP e scheduler.
+- [x] Ler a identidade Git atual ao resolver a run.
+- [x] Comparar conditions e stop rules sem diferenciar maiúsculas e minúsculas.
+- [x] Ignorar stop rules de nodes intencionalmente ignorados.
+- [x] Reportar auditoria incompleta sem evidência de todos os nodes obrigatórios.
+- [x] Atualizar a identidade Git nas listagens de fontes e flows.
+- [x] Atualizar a Skill instalada e a documentação com configuração genérica de
+  profiles, seleção e execução de nodes.
+- [x] Executar validações focadas e completas; testes de container foram
+  ignorados porque dependem de Docker.

@@ -31,10 +31,23 @@ async function readJson(request) {
 
 function validateCreate(body) {
   const valid = body && typeof body === "object" && !Array.isArray(body)
-    && Object.keys(body).every((key) => ["flowId", "workspace", "runtime", "executionMode"].includes(key))
-    && typeof body.flowId === "string" && typeof body.workspace === "string"
-    && ["codex", "claude"].includes(body.runtime) && ["guided", "direct"].includes(body.executionMode);
+    && Object.keys(body).every((key) => ["flowId", "profileId", "workspace", "runtime", "executionMode", "task"].includes(key))
+    && typeof body.flowId === "string" && /^[a-z][a-z0-9-]{0,62}$/.test(body.flowId)
+    && (body.profileId === undefined || (typeof body.profileId === "string" && /^[a-z][a-z0-9-]{0,62}$/.test(body.profileId)))
+    && typeof body.workspace === "string" && body.workspace.length > 0 && body.workspace.length <= 4096
+    && ["codex", "claude"].includes(body.runtime) && ["guided", "direct"].includes(body.executionMode)
+    && (body.task === undefined || (typeof body.task === "string" && body.task.length <= 64 * 1024));
   if (!valid) throw new FlowError("INVALID_RUN_REQUEST", "flowId, workspace, runtime, and executionMode are required.");
+}
+
+function validateFlowSelection(body) {
+  const valid = body && typeof body === "object" && !Array.isArray(body)
+    && Object.keys(body).every((key) => ["profileId", "flowId", "workspace", "task"].includes(key))
+    && typeof body.workspace === "string" && body.workspace.length > 0 && body.workspace.length <= 4096
+    && (body.profileId === undefined || (typeof body.profileId === "string" && /^[a-z][a-z0-9-]{0,62}$/.test(body.profileId)))
+    && (body.flowId === undefined || (typeof body.flowId === "string" && /^[a-z][a-z0-9-]{0,62}$/.test(body.flowId)))
+    && (body.task === undefined || (typeof body.task === "string" && body.task.length <= 64 * 1024));
+  if (!valid) throw new FlowError("INVALID_FLOW_SELECTION", "workspace and optional profileId, flowId, or task must be valid.");
 }
 
 function page(items, url) {
@@ -99,11 +112,11 @@ export function createHttpServer({ runService, runReviewService, flowSourceServi
       const url = new URL(request.url, "http://127.0.0.1");
       if (mutableMethods.has(request.method) && request.headers.origin) throw new FlowError("ORIGIN_NOT_ALLOWED", "Browser-originated mutations are not allowed.");
       if (request.method === "GET" && url.pathname === "/v1/health") return send(response, 200, serviceInfo());
-      if (request.method === "GET" && url.pathname === "/v1/flows") return send(response, 200, page(flowSourceService ? await flowSourceService.list() : [], url));
-      if (request.method === "GET" && url.pathname === "/v1/sources") return send(response, 200, { items: flowSourceService?.status() ?? [] });
-      if (request.method === "GET" && url.pathname === "/v1/runs") return send(response, 200, page(await runService.list({ flowId: url.searchParams.get("flowId") || undefined, runId: url.searchParams.get("runId") || undefined }), url));
+      if (request.method === "GET" && url.pathname === "/v1/flows") return send(response, 200, page(flowSourceService ? await flowSourceService.list({ profileId: url.searchParams.get("profileId") || undefined }) : [], url));
+      if (request.method === "GET" && url.pathname === "/v1/sources") return send(response, 200, { items: flowSourceService ? await flowSourceService.status() : [] });
+      if (request.method === "GET" && url.pathname === "/v1/runs") return send(response, 200, page(await runService.list({ flowId: url.searchParams.get("flowId") || undefined, profileId: url.searchParams.get("profileId") || undefined, runId: url.searchParams.get("runId") || undefined }), url));
 
-      const runMatch = url.pathname.match(/^\/v1\/runs\/(run_[a-z0-9-]{1,63})(?:\/(checkpoint|lifecycle|audit))?$/);
+      const runMatch = url.pathname.match(/^\/v1\/runs\/(run_[a-z0-9-]{1,63})(?:\/(checkpoint|lifecycle|audit|next))?$/);
       if (request.method === "GET" && runMatch?.[2] === undefined) return send(response, 200, await runService.get(runMatch[1]));
       if (request.method === "GET" && runMatch?.[2] === "audit") return send(response, 200, await runService.audit(runMatch[1]));
 
@@ -112,6 +125,14 @@ export function createHttpServer({ runService, runReviewService, flowSourceServi
         const result = await mutation(request, body, async () => {
           validateCreate(body);
           return { status: 201, body: await runService.create(body) };
+        });
+        return send(response, result.status, result.body);
+      }
+      if (request.method === "POST" && url.pathname === "/v1/flow-selection") {
+        const result = await mutation(request, body, async () => {
+          validateFlowSelection(body);
+          if (!flowSourceService) throw new FlowError("FLOW_SOURCE_UNAVAILABLE", "No local flow source is configured.");
+          return { status: 200, body: await flowSourceService.selectFlow(body) };
         });
         return send(response, result.status, result.body);
       }
@@ -124,6 +145,10 @@ export function createHttpServer({ runService, runReviewService, flowSourceServi
       }
       if (request.method === "POST" && runMatch?.[2] === "checkpoint") {
         const result = await mutation(request, body, async () => ({ status: 200, body: await runService.checkpoint(runMatch[1], body.receipt ?? {}) }));
+        return send(response, result.status, result.body);
+      }
+      if (request.method === "POST" && runMatch?.[2] === "next") {
+        const result = await mutation(request, body, async () => ({ status: 200, body: await runService.next(runMatch[1]) }));
         return send(response, result.status, result.body);
       }
       if (request.method === "POST" && runMatch?.[2] === "lifecycle") {

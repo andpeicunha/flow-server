@@ -9,12 +9,15 @@
     "schemaVersion": { "const": "v1" },
     "id": { "type": "string", "pattern": "^run_[a-z0-9-]{1,63}$" },
     "flowId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$" },
+    "profileId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$" },
     "flowSourceId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$" },
     "flowContentHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "flowGitCommit": { "type": "string", "pattern": "^[a-f0-9]{40,64}$" },
+    "task": { "type": "string", "maxLength": 65536 },
     "runtime": { "enum": ["codex", "claude"] },
     "executionMode": { "enum": ["guided", "direct"] },
     "status": { "enum": ["created", "running", "paused", "stopped", "completed", "failed"] },
     "createdAt": { "type": "string", "format": "date-time" }
-  }
+  },
+  "allOf": [{ "if": { "required": ["flowSourceId"] }, "then": { "required": ["profileId"] } }]
 }
