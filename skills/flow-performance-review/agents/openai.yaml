@@ -1,0 +1,4 @@
+interface:
+  display_name: "Flow Performance Review"
+  short_description: "Review run evidence and propose safe flow improvements"
+  default_prompt: "Use $flow-performance-review to analyze stored runs for this flow without editing the flow."

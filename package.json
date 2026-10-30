@@ -8,6 +8,7 @@
     "contracts",
     "examples/hello-flow",
     "skills/flow-source-management",
+    "skills/flow-performance-review",
     "README.md",
     "LICENSE"
   ],
@@ -40,6 +41,7 @@
     "./service/http-server": "./src/service/http-server.js",
     "./service/flow-source-service": "./src/service/flow-source-service.js",
     "./service/run-service": "./src/service/run-service.js",
+    "./service/run-review-service": "./src/service/run-review-service.js",
     "./service/service-host": "./src/service/service-host.js"
   },
   "scripts": {

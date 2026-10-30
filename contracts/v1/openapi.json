@@ -33,6 +33,40 @@
       "get": { "operationId": "getAudit", "parameters": [{ "$ref": "#/components/parameters/RunPathId" }], "responses": { "200": { "$ref": "#/components/responses/Audit" }, "404": { "$ref": "#/components/responses/Error" } } },
       "post": { "operationId": "auditRun", "parameters": [{ "$ref": "#/components/parameters/RunPathId" }, { "$ref": "#/components/parameters/LocalToken" }, { "$ref": "#/components/parameters/IdempotencyKey" }], "responses": { "200": { "$ref": "#/components/responses/Audit" }, "401": { "$ref": "#/components/responses/Error" }, "404": { "$ref": "#/components/responses/Error" } } }
     },
+    "/v1/reviews": {
+      "post": {
+        "operationId": "reviewFlow",
+        "parameters": [
+          { "$ref": "#/components/parameters/LocalToken" },
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["flowId"],
+                "properties": {
+                  "flowId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$" },
+                  "last": { "type": "integer", "minimum": 1, "maximum": 100 },
+                  "since": { "type": "string", "format": "date-time" },
+                  "contentHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+                  "compareVersions": { "type": "boolean" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Deterministic advisory flow review" },
+          "400": { "$ref": "#/components/responses/Error" },
+          "401": { "$ref": "#/components/responses/Error" },
+          "409": { "$ref": "#/components/responses/Error" }
+        }
+      }
+    },
     "/v1/service/shutdown": {
       "post": { "operationId": "shutdown", "parameters": [{ "$ref": "#/components/parameters/LocalToken" }, { "$ref": "#/components/parameters/IdempotencyKey" }], "responses": { "202": { "description": "Shutdown accepted" }, "401": { "$ref": "#/components/responses/Error" } } }
     }

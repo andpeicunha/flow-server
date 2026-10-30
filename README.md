@@ -132,6 +132,26 @@ and rollback behavior. Pull always requires confirmation. The optional remote
 catalog, VPS, Caddy, Cloudflare, and WorkOS deployment are paused and are not
 required for local sources.
 
+## Low-cost run evidence and flow review
+
+Node receipts may record bounded duration, attempt, effective agent/model,
+effort, Skills, deterministic validation, and passive review signals. Signals
+are advisory and must set `affectsRun: false`; they never change an active run.
+
+An explicit post-run review uses only local deterministic aggregation:
+
+```sh
+flow review sdd --last 20 --compare-versions
+flow review sdd --since 2026-10-01T00:00:00Z
+flow review sdd --content-hash <sha256>
+```
+
+The report is stored under the newest matching run at
+`runs/<runId>/review/flow-review.json`. It references the analyzed run IDs and
+groups evidence by flow content hash. It does not call a model. The installed
+`flow-performance-review` Skill tells an independent agent how to interpret the
+report and propose a separate, approved flow change.
+
 ## Remote catalog MCP (V2 development)
 
 `flow-remote-mcp` is separate from the local `flow-mcp` bridge. It has only

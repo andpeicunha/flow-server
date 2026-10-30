@@ -10,6 +10,7 @@ import { LocalToken } from "../src/core/local-token.js";
 import { FileStateStore } from "../src/core/state-store.js";
 import { createHttpServer } from "../src/service/http-server.js";
 import { RunService } from "../src/service/run-service.js";
+import { RunReviewService } from "../src/service/run-review-service.js";
 import { ServiceHost } from "../src/service/service-host.js";
 
 const execFile = promisify(execFileCallback);
@@ -92,7 +93,7 @@ test("HTTP idempotency survives a new server instance and audit reflects stored 
     const replayed = await fetch(`${context.base}/v1/runs`, { method: "POST", headers, body: JSON.stringify(body) });
     assert.equal(replayed.status, 200);
     assert.equal((await replayed.json()).id, "run_test");
-    await fetch(`${context.base}/v1/runs/run_test/checkpoint`, { method: "POST", headers: { ...headers, "idempotency-key": "failed-receipt-001" }, body: JSON.stringify({ receipt: { runId: "run_test", nodeId: "verify", status: "failed" } }) });
+    await fetch(`${context.base}/v1/runs/run_test/checkpoint`, { method: "POST", headers: { ...headers, "idempotency-key": "failed-receipt-001" }, body: JSON.stringify({ receipt: { schemaVersion: "v1", runId: "run_test", nodeId: "verify", status: "failed", recordedAt: "2026-01-01T00:00:00.000Z" } }) });
     const audit = await fetch(`${context.base}/v1/runs/run_test/audit`);
     assert.deepEqual(await audit.json(), { schemaVersion: "v1", runId: "run_test", result: "failed", findings: [{ code: "NODE_FAILED", nodeId: "verify" }] });
   } finally {
@@ -115,6 +116,29 @@ test("HTTP list runs uses an opaque cursor with stable pages", async () => {
     assert.deepEqual(second.items.map((run) => run.id), ["run_first"]);
     assert.equal(second.nextCursor, null);
     assert.equal((await fetch(`${context.base}/v1/runs?cursor=not-a-cursor`)).status, 400);
+  } finally {
+    await new Promise((resolve) => context.server.close(resolve));
+    await rm(context.directory, { recursive: true, force: true });
+  }
+});
+
+test("HTTP flow review is explicit, protected, and writes an advisory report", async () => {
+  const context = await fixture();
+  try {
+    const store = new FileStateStore(context.directory);
+    await store.writeRun({ schemaVersion: "v1", id: "run_review", flowId: "sdd", flowContentHash: "a".repeat(64), runtime: "codex", executionMode: "guided", status: "completed", createdAt: "2026-01-01T00:00:00.000Z" });
+    await new Promise((resolve) => context.server.close(resolve));
+    const token = new LocalToken(context.directory);
+    context.server = createHttpServer({ token, runService: new RunService({ stateStore: store }), runReviewService: new RunReviewService({ stateStore: store }), serviceInfo: () => ({ status: "ready" }) });
+    await new Promise((resolve) => context.server.listen(0, "127.0.0.1", resolve));
+    context.base = `http://127.0.0.1:${context.server.address().port}`;
+    const unauthorized = await fetch(`${context.base}/v1/reviews`, { method: "POST", body: JSON.stringify({ flowId: "sdd" }) });
+    assert.equal(unauthorized.status, 401);
+    const invalid = await fetch(`${context.base}/v1/reviews`, { method: "POST", headers: { "content-type": "application/json", "x-flow-local-token": context.token, "idempotency-key": "flow-review-bad-01" }, body: JSON.stringify({ flowId: "sdd", compareVersions: "false" }) });
+    assert.equal(invalid.status, 400);
+    const reviewed = await fetch(`${context.base}/v1/reviews`, { method: "POST", headers: { "content-type": "application/json", "x-flow-local-token": context.token, "idempotency-key": "flow-review-key-01" }, body: JSON.stringify({ flowId: "sdd" }) });
+    assert.equal(reviewed.status, 201);
+    assert.equal((await reviewed.json()).advisoryOnly, true);
   } finally {
     await new Promise((resolve) => context.server.close(resolve));
     await rm(context.directory, { recursive: true, force: true });
@@ -173,6 +197,9 @@ test("flow CLI uses the local API and requires explicit direct-mode approval", a
     assert.equal(JSON.parse(inspected.stdout).id, run.id);
     const audit = await execFile(process.execPath, withStateDir("audit", run.id));
     assert.equal(JSON.parse(audit.stdout).result, "passed");
+    await new FileStateStore(directory).writeRun({ ...run, status: "completed" });
+    const review = await execFile(process.execPath, withStateDir("review", "hello-flow", "--last", "5"));
+    assert.equal(JSON.parse(review.stdout).advisoryOnly, true);
   } finally {
     await host.stop();
     await rm(directory, { recursive: true, force: true });

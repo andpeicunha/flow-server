@@ -12,6 +12,40 @@
     "status": { "enum": ["completed", "failed", "skipped"] },
     "recordedAt": { "type": "string", "format": "date-time" },
     "summary": { "type": "string", "maxLength": 4000 },
-    "redactions": { "type": "integer", "minimum": 0 }
+    "redactions": { "type": "integer", "minimum": 0 },
+    "attempt": { "type": "integer", "minimum": 1, "maximum": 100 },
+    "durationMs": { "type": "integer", "minimum": 0, "maximum": 604800000 },
+    "agent": { "type": "string", "maxLength": 128 },
+    "model": { "type": "string", "maxLength": 256 },
+    "effort": { "enum": ["low", "medium", "high", "xhigh", "max", "ultra"] },
+    "skills": {
+      "type": "array",
+      "maxItems": 32,
+      "items": { "type": "string", "maxLength": 128 }
+    },
+    "validation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "result"],
+      "properties": {
+        "mode": { "const": "deterministic" },
+        "result": { "enum": ["passed", "failed", "not-run"] }
+      }
+    },
+    "signals": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["severity", "code", "reason", "affectsRun"],
+        "properties": {
+          "severity": { "enum": ["info", "warning", "critical"] },
+          "code": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,63}$" },
+          "reason": { "type": "string", "minLength": 1, "maxLength": 1000 },
+          "affectsRun": { "const": false }
+        }
+      }
+    }
   }
 }

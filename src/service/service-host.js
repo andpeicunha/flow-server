@@ -6,13 +6,14 @@ import { join } from "node:path";
 import { createHttpServer } from "./http-server.js";
 import { RunService } from "./run-service.js";
 import { FlowSourceService } from "./flow-source-service.js";
+import { RunReviewService } from "./run-review-service.js";
 
 function validPort(port) {
   return Number.isInteger(port) && port >= 1 && port <= 65535;
 }
 
 export class ServiceHost {
-  constructor({ stateDir, sourceConfig, port = 4729, version = "0.0.0-development", createServer = createHttpServer, createLock = (directory, options) => new ServiceLock(directory, options), createToken = (directory) => new LocalToken(directory), createFlowSourceService = (configPath) => new FlowSourceService({ configPath }), createRunService = (store, flowResolver) => new RunService({ stateStore: store, flowResolver }), fs = { readFile, rename, rm, writeFile } } = {}) {
+  constructor({ stateDir, sourceConfig, port = 4729, version = "0.0.0-development", createServer = createHttpServer, createLock = (directory, options) => new ServiceLock(directory, options), createToken = (directory) => new LocalToken(directory), createFlowSourceService = (configPath) => new FlowSourceService({ configPath }), createRunService = (store, flowResolver) => new RunService({ stateStore: store, flowResolver }), createRunReviewService = (store) => new RunReviewService({ stateStore: store }), fs = { readFile, rename, rm, writeFile } } = {}) {
     if (!stateDir) throw new TypeError("stateDir is required.");
     if (!validPort(port)) throw new TypeError("port must be an integer from 1 to 65535.");
     this.stateDir = stateDir;
@@ -23,7 +24,9 @@ export class ServiceHost {
     this.lock = createLock(stateDir);
     this.token = createToken(stateDir);
     this.flowSourceService = createFlowSourceService(sourceConfig);
-    this.runService = createRunService(new FileStateStore(stateDir), sourceConfig ? (flowId) => this.flowSourceService.resolve(flowId) : undefined);
+    const stateStore = new FileStateStore(stateDir);
+    this.runService = createRunService(stateStore, sourceConfig ? (flowId) => this.flowSourceService.resolve(flowId) : undefined);
+    this.runReviewService = createRunReviewService(stateStore);
     this.fs = fs;
     this.server = undefined;
     this.status = "stopped";
@@ -45,6 +48,7 @@ export class ServiceHost {
     this.status = "starting";
     this.server = this.createServer({
       runService: this.runService,
+      runReviewService: this.runReviewService,
       flowSourceService: this.flowSourceService,
       token: this.token,
       serviceInfo: () => this.health(),

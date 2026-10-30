@@ -3,10 +3,10 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { resolveStateDir } from "../core/state-dir.js";
 
-const commands = new Set(["list", "start", "inspect", "checkpoint", "audit"]);
+const commands = new Set(["list", "start", "inspect", "checkpoint", "audit", "review"]);
 
 function usage() {
-  return "Usage: flow <list|start|inspect|checkpoint|audit> [options]";
+  return "Usage: flow <list|start|inspect|checkpoint|audit|review> [options]";
 }
 
 function parse(argumentsList) {
@@ -18,7 +18,7 @@ function parse(argumentsList) {
       positional.push(item);
       continue;
     }
-    if (item === "--approve-host-adapter") {
+    if (["--approve-host-adapter", "--compare-versions"].includes(item)) {
       values[item] = true;
       continue;
     }
@@ -28,7 +28,7 @@ function parse(argumentsList) {
     values[item] = value;
     index += 1;
   }
-  const allowed = new Set(["--state-dir", "--flow", "--workspace", "--runtime", "--mode", "--receipt", "--approve-host-adapter"]);
+  const allowed = new Set(["--state-dir", "--flow", "--workspace", "--runtime", "--mode", "--receipt", "--approve-host-adapter", "--last", "--since", "--content-hash", "--compare-versions"]);
   const unexpected = Object.keys(values).find((key) => !allowed.has(key));
   if (unexpected) throw new Error(`Unsupported option: ${unexpected}`);
   return { positional, values };
@@ -86,6 +86,18 @@ async function main() {
   }
   if (command === "audit") {
     return console.log(JSON.stringify(await request(client, `/v1/runs/${requireOption({ id: positional[0] }, "id")}/audit`)));
+  }
+  if (command === "review") {
+    const last = values["--last"] === undefined ? 20 : Number(values["--last"]);
+    if (!Number.isInteger(last)) throw new Error("--last must be an integer.");
+    const body = {
+      flowId: requireOption({ flowId: positional[0] ?? values["--flow"] }, "flowId"),
+      last,
+      ...(values["--since"] ? { since: values["--since"] } : {}),
+      ...(values["--content-hash"] ? { contentHash: values["--content-hash"] } : {}),
+      ...(values["--compare-versions"] ? { compareVersions: true } : {})
+    };
+    return console.log(JSON.stringify(await request(client, "/v1/reviews", { method: "POST", body, mutate: true })));
   }
   if (command === "start") {
     const runtime = requireOption(values, "--runtime");

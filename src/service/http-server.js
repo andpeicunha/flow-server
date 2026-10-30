@@ -56,7 +56,7 @@ function page(items, url) {
   return { items: slice, nextCursor: nextOffset < items.length ? Buffer.from(JSON.stringify({ offset: nextOffset })).toString("base64url") : null };
 }
 
-export function createHttpServer({ runService, flowSourceService, token, serviceInfo, onShutdown = async () => {}, idempotencyStore = runService.stateStore }) {
+export function createHttpServer({ runService, runReviewService, flowSourceService, token, serviceInfo, onShutdown = async () => {}, idempotencyStore = runService.stateStore }) {
   const idempotency = new Map();
 
   async function mutation(request, body, handler) {
@@ -94,6 +94,13 @@ export function createHttpServer({ runService, flowSourceService, token, service
         const result = await mutation(request, body, async () => {
           validateCreate(body);
           return { status: 201, body: await runService.create(body) };
+        });
+        return send(response, result.status, result.body);
+      }
+      if (request.method === "POST" && url.pathname === "/v1/reviews") {
+        const result = await mutation(request, body, async () => {
+          if (!runReviewService) throw new FlowError("FLOW_REVIEW_UNAVAILABLE", "Flow review is unavailable.");
+          return { status: 201, body: await runReviewService.review(body) };
         });
         return send(response, result.status, result.body);
       }

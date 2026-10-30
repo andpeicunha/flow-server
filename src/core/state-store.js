@@ -26,7 +26,13 @@ export class FileStateStore {
 
   async writeReceipt(receipt) {
     assertRunId(receipt.runId);
+    if (!/^[a-z][a-z0-9-]{0,62}$/.test(receipt.nodeId ?? "")) throw new TypeError("Invalid node id.");
     await this.writeJson(join(this.runDirectory(receipt.runId), `receipt-${receipt.nodeId}.json`), receipt);
+  }
+
+  async writeReview(runId, report) {
+    assertRunId(runId);
+    await this.writeJson(join(this.runDirectory(runId), "review", "flow-review.json"), report);
   }
 
   async readRun(runId) {
