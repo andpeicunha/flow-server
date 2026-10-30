@@ -13,6 +13,9 @@
     "/v1/flows": {
       "get": { "operationId": "listFlows", "parameters": [{ "$ref": "#/components/parameters/Cursor" }, { "$ref": "#/components/parameters/Limit" }], "responses": { "200": { "$ref": "#/components/responses/FlowPage" } } }
     },
+    "/v1/sources": {
+      "get": { "operationId": "listFlowSources", "responses": { "200": { "description": "Configured non-secret local flow source status" } } }
+    },
     "/v1/runs": {
       "get": { "operationId": "listRuns", "parameters": [{ "$ref": "#/components/parameters/FlowId" }, { "$ref": "#/components/parameters/RunId" }, { "$ref": "#/components/parameters/Cursor" }, { "$ref": "#/components/parameters/Limit" }], "responses": { "200": { "$ref": "#/components/responses/RunPage" } } },
       "post": { "operationId": "createRun", "parameters": [{ "$ref": "#/components/parameters/LocalToken" }, { "$ref": "#/components/parameters/IdempotencyKey" }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateRunRequest" } } } }, "responses": { "201": { "$ref": "#/components/responses/Run" }, "200": { "$ref": "#/components/responses/Run" }, "400": { "$ref": "#/components/responses/Error" }, "401": { "$ref": "#/components/responses/Error" }, "409": { "$ref": "#/components/responses/Error" } } }

@@ -30,7 +30,10 @@ async function readJson(request) {
 }
 
 function validateCreate(body) {
-  const valid = typeof body.flowId === "string" && typeof body.workspace === "string" && ["codex", "claude"].includes(body.runtime) && ["guided", "direct"].includes(body.executionMode);
+  const valid = body && typeof body === "object" && !Array.isArray(body)
+    && Object.keys(body).every((key) => ["flowId", "workspace", "runtime", "executionMode"].includes(key))
+    && typeof body.flowId === "string" && typeof body.workspace === "string"
+    && ["codex", "claude"].includes(body.runtime) && ["guided", "direct"].includes(body.executionMode);
   if (!valid) throw new FlowError("INVALID_RUN_REQUEST", "flowId, workspace, runtime, and executionMode are required.");
 }
 
@@ -53,7 +56,7 @@ function page(items, url) {
   return { items: slice, nextCursor: nextOffset < items.length ? Buffer.from(JSON.stringify({ offset: nextOffset })).toString("base64url") : null };
 }
 
-export function createHttpServer({ runService, token, serviceInfo, onShutdown = async () => {}, idempotencyStore = runService.stateStore }) {
+export function createHttpServer({ runService, flowSourceService, token, serviceInfo, onShutdown = async () => {}, idempotencyStore = runService.stateStore }) {
   const idempotency = new Map();
 
   async function mutation(request, body, handler) {
@@ -78,7 +81,8 @@ export function createHttpServer({ runService, token, serviceInfo, onShutdown = 
       const url = new URL(request.url, "http://127.0.0.1");
       if (mutableMethods.has(request.method) && request.headers.origin) throw new FlowError("ORIGIN_NOT_ALLOWED", "Browser-originated mutations are not allowed.");
       if (request.method === "GET" && url.pathname === "/v1/health") return send(response, 200, serviceInfo());
-      if (request.method === "GET" && url.pathname === "/v1/flows") return send(response, 200, page([], url));
+      if (request.method === "GET" && url.pathname === "/v1/flows") return send(response, 200, page(flowSourceService ? await flowSourceService.list() : [], url));
+      if (request.method === "GET" && url.pathname === "/v1/sources") return send(response, 200, { items: flowSourceService?.status() ?? [] });
       if (request.method === "GET" && url.pathname === "/v1/runs") return send(response, 200, page(await runService.list({ flowId: url.searchParams.get("flowId") || undefined, runId: url.searchParams.get("runId") || undefined }), url));
 
       const runMatch = url.pathname.match(/^\/v1\/runs\/(run_[a-z0-9-]{1,63})(?:\/(checkpoint|lifecycle|audit))?$/);
@@ -115,7 +119,7 @@ export function createHttpServer({ runService, token, serviceInfo, onShutdown = 
       return send(response, 404, error(404, "NOT_FOUND", "Route not found.").body);
     } catch (caught) {
       const known = caught instanceof FlowError;
-      const status = caught.code === "UNAUTHORIZED" ? 401 : caught.code === "RUN_NOT_FOUND" ? 404 : caught.code === "IDEMPOTENCY_CONFLICT" ? 409 : known ? 400 : 500;
+      const status = caught.code === "UNAUTHORIZED" ? 401 : ["RUN_NOT_FOUND", "FLOW_NOT_FOUND"].includes(caught.code) ? 404 : caught.code === "IDEMPOTENCY_CONFLICT" ? 409 : known ? 400 : 500;
       return send(response, status, { error: { code: known ? caught.code : "INTERNAL_ERROR", message: known ? caught.message : "Internal service error." } });
     }
   });

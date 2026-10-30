@@ -5,7 +5,7 @@ import test from "node:test";
 const json = (path) => readFile(new URL(path, import.meta.url), "utf8").then(JSON.parse);
 
 test("every v1 JSON Schema contract has a stable identifier", async () => {
-  for (const file of ["flow-document.schema.json", "run.schema.json", "receipt.schema.json", "http-error.schema.json", "run-state-machine.json"]) {
+  for (const file of ["flow-document.schema.json", "flow-source-config.schema.json", "run.schema.json", "receipt.schema.json", "http-error.schema.json", "run-state-machine.json"]) {
     const schema = await json(`../contracts/v1/${file}`);
     assert.equal(schema.$schema, "https://json-schema.org/draft/2020-12/schema");
     assert.match(schema.$id, /^https:\/\/flow-server\.dev\/contracts\/v1\//);

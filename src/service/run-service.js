@@ -2,13 +2,14 @@ import { randomUUID } from "node:crypto";
 import { FlowError } from "../core/errors.js";
 import { transitionRun } from "../core/lifecycle.js";
 
-const publicRun = ({ workspace, ...run }) => run;
+const publicRun = ({ workspace, flowDefinition, ...run }) => run;
 
 export class RunService {
-  constructor({ stateStore, now = () => new Date().toISOString(), createId = () => `run_${randomUUID()}` } = {}) {
+  constructor({ stateStore, flowResolver, now = () => new Date().toISOString(), createId = () => `run_${randomUUID()}` } = {}) {
     this.stateStore = stateStore;
     this.now = now;
     this.createId = createId;
+    this.flowResolver = flowResolver;
   }
 
   async list({ flowId, runId } = {}) {
@@ -25,11 +26,16 @@ export class RunService {
     }
   }
 
-  async create({ flowId, workspace, runtime, executionMode }) {
+  async create({ flowId, workspace, runtime, executionMode, flowSourceId, flowContentHash, flowGitCommit }) {
+    const resolved = this.flowResolver ? await this.flowResolver(flowId) : {};
     const run = {
       schemaVersion: "v1",
       id: this.createId(),
       flowId,
+      ...(resolved.flowSourceId || flowSourceId ? { flowSourceId: resolved.flowSourceId ?? flowSourceId } : {}),
+      ...(resolved.flowContentHash || flowContentHash ? { flowContentHash: resolved.flowContentHash ?? flowContentHash } : {}),
+      ...(resolved.flowGitCommit || flowGitCommit ? { flowGitCommit: resolved.flowGitCommit ?? flowGitCommit } : {}),
+      ...(resolved.flowDefinition ? { flowDefinition: resolved.flowDefinition } : {}),
       workspace,
       runtime,
       executionMode,

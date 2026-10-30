@@ -3,16 +3,29 @@
   "version": "0.0.0-development",
   "private": true,
   "description": "Local-first workflow service contracts and synthetic fixtures.",
+  "files": [
+    "src",
+    "contracts",
+    "examples/hello-flow",
+    "skills/flow-source-management",
+    "README.md",
+    "LICENSE"
+  ],
   "type": "module",
   "bin": {
     "flow-server": "./src/cli/flow-server.mjs",
     "flow": "./src/cli/flow.mjs",
+    "flow-source": "./src/cli/flow-source.mjs",
     "flow-mcp": "./src/cli/flow-mcp.mjs",
     "flow-remote-mcp": "./src/cli/flow-remote-mcp.mjs"
   },
   "exports": {
     "./core/lifecycle": "./src/core/lifecycle.js",
     "./core/flow-catalog": "./src/core/flow-catalog.js",
+    "./core/flow-document": "./src/core/flow-document.js",
+    "./core/flow-change-tracker": "./src/core/flow-change-tracker.js",
+    "./core/flow-source-config": "./src/core/flow-source-config.js",
+    "./core/flow-sync-policy": "./src/core/flow-sync-policy.js",
     "./core/redaction": "./src/core/redaction.js",
     "./core/service-lock": "./src/core/service-lock.js",
     "./core/state-dir": "./src/core/state-dir.js",
@@ -25,6 +38,7 @@
     "./remote/catalog": "./src/remote/catalog.js",
     "./remote/release-file": "./src/remote/release-file.js",
     "./service/http-server": "./src/service/http-server.js",
+    "./service/flow-source-service": "./src/service/flow-source-service.js",
     "./service/run-service": "./src/service/run-service.js",
     "./service/service-host": "./src/service/service-host.js"
   },
@@ -40,6 +54,7 @@
     "@modelcontextprotocol/sdk": "^1.32.1",
     "express": "^5.3.0",
     "jose": "^6.2.12",
+    "yaml": "^2.9.1",
     "zod": "^4.6.7"
   }
 }

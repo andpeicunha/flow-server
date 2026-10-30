@@ -9,7 +9,7 @@ import { ServiceHost } from "../service/service-host.js";
 const commands = new Set(["start", "status", "stop", "doctor", "serve"]);
 
 function usage() {
-  return "Usage: flow-server <start|status|stop|doctor> [--state-dir DIR] [--port PORT]";
+  return "Usage: flow-server <start|status|stop|doctor> [--state-dir DIR] [--source-config FILE] [--port PORT]";
 }
 
 function options(argumentsList) {
@@ -21,11 +21,11 @@ function options(argumentsList) {
     if (!values[key] || values[key].startsWith("--")) throw new Error(`Missing value for ${key}`);
     index += 1;
   }
-  const unexpected = Object.keys(values).find((key) => !["--state-dir", "--port"].includes(key));
+  const unexpected = Object.keys(values).find((key) => !["--state-dir", "--source-config", "--port"].includes(key));
   if (unexpected) throw new Error(`Unsupported option: ${unexpected}`);
   const port = values["--port"] === undefined ? 4729 : Number(values["--port"]);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("--port must be an integer from 1 to 65535.");
-  return { stateDir: values["--state-dir"] || resolveStateDir({ homeDir: homedir() }), port };
+  return { stateDir: values["--state-dir"] || resolveStateDir({ homeDir: homedir() }), sourceConfig: values["--source-config"], port };
 }
 
 async function metadata(stateDir) {
@@ -48,10 +48,19 @@ async function serve(configuration) {
 
 async function start(configuration) {
   try {
-    console.log(JSON.stringify(await health(`http://127.0.0.1:${configuration.port}`)));
+    const running = await health(`http://127.0.0.1:${configuration.port}`);
+    if ((running.sourceConfig || configuration.sourceConfig) && running.sourceConfig !== configuration.sourceConfig) {
+      throw new Error("flow-service is already running with a different source configuration.");
+    }
+    console.log(JSON.stringify(running));
     return;
-  } catch { /* Start a new local service. */ }
-  const child = spawn(process.execPath, [fileURLToPath(import.meta.url), "serve", "--state-dir", configuration.stateDir, "--port", String(configuration.port)], { detached: true, stdio: "ignore" });
+  } catch (error) {
+    if (String(error?.message || "").includes("different source configuration")) throw error;
+    /* Start a new local service. */
+  }
+  const childArguments = [fileURLToPath(import.meta.url), "serve", "--state-dir", configuration.stateDir, "--port", String(configuration.port)];
+  if (configuration.sourceConfig) childArguments.push("--source-config", configuration.sourceConfig);
+  const child = spawn(process.execPath, childArguments, { detached: true, stdio: "ignore" });
   child.unref();
   for (let attempt = 0; attempt < 20; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 100));

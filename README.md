@@ -95,6 +95,43 @@ host launcher.
 and connects only to the loopback service. Setup instructions are in
 [docs/codex-mcp.md](docs/codex-mcp.md).
 
+## Local flow sources
+
+Personal flows stay in explicitly configured local directories. A source may be
+`local` or a local `git` worktree owned by the developer. `flow-server` never
+searches `$HOME`, stores Git credentials, or requires a remote service.
+
+Create an owner-only JSON or restricted YAML configuration:
+
+```yaml
+schemaVersion: v1
+sources:
+  - id: personal
+    mode: local
+    path: /absolute/path/to/flows
+    sync:
+      pull: confirm
+      push: manual
+```
+
+Start the service with the explicit file:
+
+```sh
+flow-server start --source-config /absolute/path/to/sources.yaml
+```
+
+Validate and record a changed flow without performing any Git mutation:
+
+```sh
+flow-source validate /absolute/path/to/flow.yaml
+flow-source mark --config /absolute/path/to/sources.yaml --source personal --file /absolute/path/to/flow.yaml
+```
+
+The installed `flow-source-management` Skill defines safe commit, push, pull,
+and rollback behavior. Pull always requires confirmation. The optional remote
+catalog, VPS, Caddy, Cloudflare, and WorkOS deployment are paused and are not
+required for local sources.
+
 ## Remote catalog MCP (V2 development)
 
 `flow-remote-mcp` is separate from the local `flow-mcp` bridge. It has only
