@@ -27,6 +27,7 @@
     "./core/flow-change-tracker": "./src/core/flow-change-tracker.js",
     "./core/flow-source-config": "./src/core/flow-source-config.js",
     "./core/flow-sync-policy": "./src/core/flow-sync-policy.js",
+    "./core/date-time": "./src/core/date-time.js",
     "./core/redaction": "./src/core/redaction.js",
     "./core/service-lock": "./src/core/service-lock.js",
     "./core/state-dir": "./src/core/state-dir.js",
@@ -54,6 +55,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",
+    "ajv-formats": "^3.0.1",
     "express": "^5.3.0",
     "jose": "^6.2.12",
     "yaml": "^2.9.1",

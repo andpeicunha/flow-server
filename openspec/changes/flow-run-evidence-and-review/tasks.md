@@ -9,4 +9,8 @@
 - [x] Add the `flow-performance-review` Skill.
 - [x] Add unit, service, CLI, contract, and public artifact tests.
 - [x] Document the review workflow and cost boundary.
+- [x] Enforce runtime/schema type and RFC 3339 parity for receipts and filters.
+- [x] Reject symlinked review output and unrealistic evidence volumes.
+- [x] Report partial, unexpected, and unknown receipt completeness.
+- [x] Coalesce concurrent mutations that reuse one idempotency key.
 

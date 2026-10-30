@@ -13,7 +13,8 @@ flow. Never invoke it from an active node.
 2. Confirm the report's `flowId`, content-hash groups, run IDs, sample sizes,
    and `advisoryOnly: true` marker.
 3. Evaluate success rate, failures, retries, duration, validation failures,
-   missing metrics, and passive signals per node.
+   missing metrics, passive signals, and `runEvidence` completeness per node.
+   Treat `unknown` as missing proof, not as complete evidence.
 4. Treat a single anomaly as weak evidence. State sample size and confidence.
 5. Read referenced receipts only when a finding needs more context. Do not copy
    secrets, full prompts, or private output into the report.

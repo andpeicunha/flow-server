@@ -58,22 +58,40 @@ function page(items, url) {
 
 export function createHttpServer({ runService, runReviewService, flowSourceService, token, serviceInfo, onShutdown = async () => {}, idempotencyStore = runService.stateStore }) {
   const idempotency = new Map();
+  const inFlightIdempotency = new Map();
 
   async function mutation(request, body, handler) {
     if (!(await token.matches(request.headers["x-flow-local-token"]))) throw new FlowError("UNAUTHORIZED", "A valid local service token is required.");
     const key = request.headers["idempotency-key"];
     if (typeof key !== "string" || key.length < 16 || key.length > 128) throw new FlowError("INVALID_IDEMPOTENCY_KEY", "A 16-128 character Idempotency-Key is required.");
     const fingerprint = `${request.method}:${request.url}:${JSON.stringify(body)}`;
-    const existing = idempotency.get(key) ?? await idempotencyStore.readIdempotency(key);
+    let existing = idempotency.get(key);
+    if (!existing) {
+      const persisted = await idempotencyStore.readIdempotency(key);
+      existing = idempotency.get(key) ?? persisted;
+    }
     if (existing) {
       if (existing.fingerprint !== fingerprint) throw new FlowError("IDEMPOTENCY_CONFLICT", "Idempotency-Key was already used for another request.");
       return { status: 200, body: existing.body };
     }
-    const result = await handler();
-    const entry = { fingerprint, body: result.body };
-    await idempotencyStore.writeIdempotency(key, entry);
-    idempotency.set(key, entry);
-    return result;
+    const inFlight = inFlightIdempotency.get(key);
+    if (inFlight) {
+      if (inFlight.fingerprint !== fingerprint) throw new FlowError("IDEMPOTENCY_CONFLICT", "Idempotency-Key is already in use for another request.");
+      return inFlight.promise;
+    }
+    const promise = (async () => {
+      const result = await handler();
+      const entry = { fingerprint, body: result.body };
+      await idempotencyStore.writeIdempotency(key, entry);
+      idempotency.set(key, entry);
+      return result;
+    })();
+    inFlightIdempotency.set(key, { fingerprint, promise });
+    try {
+      return await promise;
+    } finally {
+      if (inFlightIdempotency.get(key)?.promise === promise) inFlightIdempotency.delete(key);
+    }
   }
 
   return createServer(async (request, response) => {

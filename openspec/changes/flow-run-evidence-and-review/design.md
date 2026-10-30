@@ -28,3 +28,10 @@ success rate, retries, average duration, validation failures, missing evidence,
 and passive signal counts. Recommendations are evidence pointers, not automatic
 flow changes.
 
+Evidence completeness is compared with the immutable flow snapshot when it is
+available. Older runs without a snapshot are marked `unknown`. The review
+fails closed when local evidence exceeds the bounded node or finding limits;
+thousands of nodes are treated as invalid or corrupted evidence, not a
+supported software-flow shape. Review output is written only to a real
+directory contained by the run dossier, never through a symlink.
+

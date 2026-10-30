@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -50,10 +50,17 @@ test("flow review excludes active runs and applies version, date, and count filt
     assert.equal(latest.runsAnalyzed, 1);
     const hashFiltered = await service.review({ flowId: "sdd", contentHash: hashA, since: "2026-01-15T00:00:00.000Z" });
     assert.deepEqual(hashFiltered.runIds, ["run_middle"]);
+    const shortOffset = await service.review({ flowId: "sdd", contentHash: hashA, since: "2026-01-01T00:00:00+00" });
+    assert.deepEqual(shortOffset.runIds, ["run_middle", "run_early"]);
+    const leapSecond = await service.review({ flowId: "sdd", contentHash: hashA, since: "2016-12-31T23:59:60Z" });
+    assert.deepEqual(leapSecond.runIds, ["run_middle", "run_early"]);
+    const spaceSeparator = await service.review({ flowId: "sdd", contentHash: hashA, since: "2026-01-01 00:00:00Z" });
+    assert.deepEqual(spaceSeparator.runIds, ["run_middle", "run_early"]);
     const limited = await service.review({ flowId: "sdd", last: 1, compareVersions: true });
     assert.deepEqual(limited.runIds, ["run_latest"]);
     await assert.rejects(service.review({ flowId: "sdd", compareVersions: "false" }), (error) => error.code === "INVALID_FLOW_REVIEW");
     await assert.rejects(service.review({ flowId: "sdd", extra: true }), (error) => error.code === "INVALID_FLOW_REVIEW");
+    await assert.rejects(service.review({ flowId: "sdd", since: "2026-01-01" }), (error) => error.code === "INVALID_FLOW_REVIEW");
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -69,8 +76,60 @@ test("active checkpoint accepts passive signals but rejects signals that affect 
     assert.equal((await service.get("run_signal")).status, "created");
     await assert.rejects(service.checkpoint("run_signal", { schemaVersion: "v1", runId: "run_signal", nodeId: "verify", status: "completed", recordedAt: "2026-01-01T00:00:00.000Z", signals: [{ severity: "critical", code: "STOP", reason: "Must not stop", affectsRun: true }] }), (error) => error.code === "INVALID_RECEIPT");
     await assert.rejects(service.checkpoint("run_signal", { schemaVersion: "v1", runId: "run_signal", nodeId: "../escape", status: "completed", recordedAt: "2026-01-01T00:00:00.000Z" }), (error) => error.code === "INVALID_RECEIPT");
+    await assert.rejects(service.checkpoint("run_signal", { schemaVersion: "v1", runId: "run_signal", nodeId: ["build"], status: "completed", recordedAt: "2026-01-01T00:00:00.000Z" }), (error) => error.code === "INVALID_RECEIPT");
+    await assert.rejects(service.checkpoint("run_signal", { schemaVersion: "v1", runId: "run_signal", nodeId: "build", status: "completed", recordedAt: "2026-01-01" }), (error) => error.code === "INVALID_RECEIPT");
+    await assert.rejects(service.checkpoint("run_signal", { schemaVersion: "v1", runId: "run_signal", nodeId: "build", status: "completed", recordedAt: "2026-02-30T00:00:00Z" }), (error) => error.code === "INVALID_RECEIPT");
+    await assert.rejects(service.checkpoint("run_signal", { schemaVersion: "v1", runId: "run_signal", nodeId: "build", status: "completed", recordedAt: "2026-01-01T24:00:00Z" }), (error) => error.code === "INVALID_RECEIPT");
+    await service.checkpoint("run_signal", { schemaVersion: "v1", runId: "run_signal", nodeId: "lowercase-time", status: "completed", recordedAt: "2026-01-01t00:00:00z" });
+    await assert.rejects(service.checkpoint("run_signal", { schemaVersion: "v1", runId: "run_signal", nodeId: "build", status: "completed", recordedAt: "2026-01-01T00:00:00Z", signals: [{ severity: "warning", code: ["REVIEW"], reason: "Invalid type", affectsRun: false }] }), (error) => error.code === "INVALID_RECEIPT");
     await assert.rejects(store.writeReceipt({ runId: "run_signal", nodeId: "../escape", status: "completed" }), /Invalid node id/);
   } finally {
     await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("flow review reports partial and unexpected node evidence", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "flow-review-test-"));
+  try {
+    const store = new FileStateStore(directory);
+    await store.writeRun({ id: "run_partial", flowId: "sdd", flowContentHash: hashA, status: "completed", createdAt: "2026-01-01T00:00:00.000Z", flowDefinition: { nodes: [{ id: "build" }, { id: "verify" }] } });
+    await store.writeReceipt({ runId: "run_partial", nodeId: "build", status: "completed" });
+    await store.writeReceipt({ runId: "run_partial", nodeId: "extra", status: "completed" });
+    const report = await new RunReviewService({ stateStore: store }).review({ flowId: "sdd" });
+    assert.deepEqual(report.versions[0].missingReceiptRuns, ["run_partial"]);
+    assert.deepEqual(report.versions[0].runEvidence, [{ runId: "run_partial", completeness: "incomplete", missingNodeIds: ["verify"], unexpectedNodeIds: ["extra"] }]);
+    assert.ok(report.findings.some((finding) => finding.code === "NODE_RECEIPT_MISSING" && finding.nodeId === "verify"));
+    assert.ok(report.findings.some((finding) => finding.code === "UNEXPECTED_NODE_RECEIPT" && finding.nodeId === "extra"));
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("flow review rejects unrealistic evidence volume and symlinked review directories", async () => {
+  const receipts = Array.from({ length: 2049 }, (_value, index) => ({ nodeId: `n${index.toString(36)}`, status: "completed" }));
+  const fakeStore = {
+    listRuns: async () => [{ id: "run_large", flowId: "sdd", flowContentHash: hashA, status: "completed", createdAt: "2026-01-01T00:00:00.000Z" }],
+    listReceipts: async () => receipts,
+    writeReview: async () => { throw new Error("must not write"); }
+  };
+  await assert.rejects(new RunReviewService({ stateStore: fakeStore }).review({ flowId: "sdd" }), (error) => error.code === "FLOW_REVIEW_EVIDENCE_LIMIT");
+  const expectedNodeStore = {
+    listRuns: async () => [{ id: "run_expected", flowId: "sdd", flowContentHash: hashA, status: "completed", createdAt: "2026-01-01T00:00:00.000Z", flowDefinition: { nodes: receipts.map((receipt) => ({ id: receipt.nodeId })) } }],
+    listReceipts: async () => [],
+    writeReview: async () => { throw new Error("must not write"); }
+  };
+  await assert.rejects(new RunReviewService({ stateStore: expectedNodeStore }).review({ flowId: "sdd" }), (error) => error.code === "FLOW_REVIEW_EVIDENCE_LIMIT");
+
+  const directory = await mkdtemp(join(tmpdir(), "flow-review-test-"));
+  const outside = await mkdtemp(join(tmpdir(), "flow-review-outside-"));
+  try {
+    const store = new FileStateStore(directory);
+    await store.writeRun({ id: "run_link", flowId: "sdd", flowContentHash: hashA, status: "completed", createdAt: "2026-01-01T00:00:00.000Z" });
+    await symlink(outside, join(directory, "runs", "run_link", "review"));
+    await assert.rejects(new RunReviewService({ stateStore: store }).review({ flowId: "sdd" }), /must not be a symbolic link/);
+    await assert.rejects(readFile(join(outside, "flow-review.json"), "utf8"), { code: "ENOENT" });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
   }
 });

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { lstat, mkdir, readFile, readdir, realpath, rename, writeFile } from "node:fs/promises";
+import { dirname, join, relative } from "node:path";
 import { redact } from "./redaction.js";
 
 function assertRunId(runId) {
@@ -8,7 +8,7 @@ function assertRunId(runId) {
 }
 
 export class FileStateStore {
-  constructor(stateDir, { fs = { mkdir, readFile, readdir, rename, writeFile }, redactor = redact } = {}) {
+  constructor(stateDir, { fs = { lstat, mkdir, readFile, readdir, realpath, rename, writeFile }, redactor = redact } = {}) {
     this.stateDir = stateDir;
     this.fs = fs;
     this.redactor = redactor;
@@ -26,13 +26,22 @@ export class FileStateStore {
 
   async writeReceipt(receipt) {
     assertRunId(receipt.runId);
-    if (!/^[a-z][a-z0-9-]{0,62}$/.test(receipt.nodeId ?? "")) throw new TypeError("Invalid node id.");
+    if (typeof receipt.nodeId !== "string" || !/^[a-z][a-z0-9-]{0,62}$/.test(receipt.nodeId)) throw new TypeError("Invalid node id.");
     await this.writeJson(join(this.runDirectory(receipt.runId), `receipt-${receipt.nodeId}.json`), receipt);
   }
 
   async writeReview(runId, report) {
     assertRunId(runId);
-    await this.writeJson(join(this.runDirectory(runId), "review", "flow-review.json"), report);
+    const runDirectory = this.runDirectory(runId);
+    const canonicalRun = await this.fs.realpath(runDirectory);
+    const reviewDirectory = join(runDirectory, "review");
+    const existing = await this.fs.lstat(reviewDirectory).catch((error) => error.code === "ENOENT" ? undefined : Promise.reject(error));
+    if (existing?.isSymbolicLink()) throw new TypeError("Review directory must not be a symbolic link.");
+    await this.fs.mkdir(reviewDirectory, { recursive: true, mode: 0o700 });
+    const canonicalReview = await this.fs.realpath(reviewDirectory);
+    const pathFromRun = relative(canonicalRun, canonicalReview);
+    if (pathFromRun.startsWith("..") || pathFromRun.includes("../")) throw new TypeError("Review directory escapes the run dossier.");
+    await this.writeJson(join(canonicalReview, "flow-review.json"), report);
   }
 
   async readRun(runId) {

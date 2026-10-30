@@ -13,6 +13,11 @@ test("every v1 JSON Schema contract has a stable identifier", async () => {
   }
 });
 
+test("every directly imported runtime package is declared", async () => {
+  const packageFile = await json("../package.json");
+  assert.equal(packageFile.dependencies["ajv-formats"], "^3.0.1");
+});
+
 test("the HTTP contract is loopback-only and protects every mutable operation", async () => {
   const api = await json("../contracts/v1/openapi.json");
   assert.equal(api.openapi, "3.1.0");

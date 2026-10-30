@@ -145,6 +145,67 @@ test("HTTP flow review is explicit, protected, and writes an advisory report", a
   }
 });
 
+test("HTTP idempotency coalesces concurrent review requests", async () => {
+  const context = await fixture();
+  try {
+    await new Promise((resolve) => context.server.close(resolve));
+    const store = new FileStateStore(context.directory);
+    const token = new LocalToken(context.directory);
+    let calls = 0;
+    const runReviewService = { review: async () => {
+      calls += 1;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      return { call: calls };
+    } };
+    context.server = createHttpServer({ token, runService: new RunService({ stateStore: store }), runReviewService, serviceInfo: () => ({ status: "ready" }) });
+    await new Promise((resolve) => context.server.listen(0, "127.0.0.1", resolve));
+    context.base = `http://127.0.0.1:${context.server.address().port}`;
+    const options = { method: "POST", headers: { "content-type": "application/json", "x-flow-local-token": context.token, "idempotency-key": "concurrent-review-01" }, body: JSON.stringify({ flowId: "sdd" }) };
+    const [first, second] = await Promise.all([fetch(`${context.base}/v1/reviews`, options), fetch(`${context.base}/v1/reviews`, options)]);
+    assert.equal(calls, 1);
+    assert.deepEqual(await first.json(), { call: 1 });
+    assert.deepEqual(await second.json(), { call: 1 });
+  } finally {
+    await new Promise((resolve) => context.server.close(resolve));
+    await rm(context.directory, { recursive: true, force: true });
+  }
+});
+
+test("HTTP idempotency rechecks memory after a delayed disk miss", async () => {
+  const context = await fixture();
+  try {
+    await new Promise((resolve) => context.server.close(resolve));
+    const store = new FileStateStore(context.directory);
+    const token = new LocalToken(context.directory);
+    let reads = 0;
+    const delayedStore = {
+      readIdempotency: async () => {
+        reads += 1;
+        if (reads === 2) await new Promise((resolve) => setTimeout(resolve, 60));
+        return undefined;
+      },
+      writeIdempotency: (...argumentsList) => store.writeIdempotency(...argumentsList)
+    };
+    let calls = 0;
+    const runReviewService = { review: async () => {
+      calls += 1;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return { call: calls };
+    } };
+    context.server = createHttpServer({ token, runService: new RunService({ stateStore: store }), runReviewService, idempotencyStore: delayedStore, serviceInfo: () => ({ status: "ready" }) });
+    await new Promise((resolve) => context.server.listen(0, "127.0.0.1", resolve));
+    context.base = `http://127.0.0.1:${context.server.address().port}`;
+    const options = { method: "POST", headers: { "content-type": "application/json", "x-flow-local-token": context.token, "idempotency-key": "delayed-review-key" }, body: JSON.stringify({ flowId: "sdd" }) };
+    const [first, second] = await Promise.all([fetch(`${context.base}/v1/reviews`, options), fetch(`${context.base}/v1/reviews`, options)]);
+    assert.equal(calls, 1);
+    assert.deepEqual(await first.json(), { call: 1 });
+    assert.deepEqual(await second.json(), { call: 1 });
+  } finally {
+    await new Promise((resolve) => context.server.close(resolve));
+    await rm(context.directory, { recursive: true, force: true });
+  }
+});
+
 test("service host acquires its lock before loopback bind and releases only on stop", async () => {
   const directory = await mkdtemp(join(tmpdir(), "flow-service-test-"));
   const port = 47991;

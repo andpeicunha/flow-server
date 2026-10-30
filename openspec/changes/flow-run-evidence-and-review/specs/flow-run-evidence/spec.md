@@ -22,3 +22,14 @@ Every review SHALL identify the flow ID, content hash, and analyzed run IDs.
 - **WHEN** stored run evidence is reviewed
 - **THEN** the report identifies its flow, version groups, and run IDs
 
+#### Scenario: Stored receipts are incomplete
+
+- **WHEN** a flow snapshot names nodes without matching receipts
+- **THEN** the report marks the run evidence incomplete
+- **AND** identifies missing node receipts without affecting the run
+
+#### Scenario: Review output is redirected by a symlink
+
+- **WHEN** the review directory is a symbolic link
+- **THEN** report persistence fails without writing outside the run dossier
+

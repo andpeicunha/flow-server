@@ -152,6 +152,11 @@ groups evidence by flow content hash. It does not call a model. The installed
 `flow-performance-review` Skill tells an independent agent how to interpret the
 report and propose a separate, approved flow change.
 
+When a run has an immutable flow snapshot, the report compares expected nodes
+with stored receipts. Older runs without a snapshot are marked with unknown
+evidence completeness. Evidence beyond the bounded software-flow limits is
+rejected instead of producing an oversized report.
+
 ## Remote catalog MCP (V2 development)
 
 `flow-remote-mcp` is separate from the local `flow-mcp` bridge. It has only
