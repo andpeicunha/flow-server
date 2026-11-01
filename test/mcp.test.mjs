@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
+import { once } from "node:events";
 import test from "node:test";
 import { LocalToken } from "../src/core/local-token.js";
 import { FileStateStore } from "../src/core/state-store.js";
 import { LocalFlowClient } from "../src/mcp/local-client.js";
-import { callTool, handleRequest, tools } from "../src/mcp/server.js";
+import { callTool, handleRequest, startStdioServer, tools } from "../src/mcp/server.js";
 import { createHttpServer } from "../src/service/http-server.js";
 import { RunService } from "../src/service/run-service.js";
 
@@ -47,4 +49,21 @@ test("flow-mcp advertises a bounded tool set and fails unavailable actions close
   const unavailable = await callTool({}, "flow_open", { runId: "run_test" });
   assert.equal(unavailable.isError, true);
   assert.match(unavailable.content[0].text, /MCP_OPERATION_UNAVAILABLE/);
+});
+
+test("flow-mcp answers JSON-RPC request id zero", async () => {
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const reader = startStdioServer({}, { input, output });
+  try {
+    const response = once(output, "data");
+    input.write(`${JSON.stringify({ jsonrpc: "2.0", id: 0, method: "initialize" })}\n`);
+    const [chunk] = await response;
+    assert.equal(JSON.parse(chunk.toString()).id, 0);
+    assert.equal(JSON.parse(chunk.toString()).result.serverInfo.name, "flow-mcp");
+  } finally {
+    reader.close();
+    input.destroy();
+    output.destroy();
+  }
 });

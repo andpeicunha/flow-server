@@ -4,11 +4,14 @@
 connects only to `http://127.0.0.1`. It never runs shell commands, reads run
 directories, or starts Codex or Claude adapters.
 
-Install this repository locally, then start the service:
+Install this repository locally, then start the service. For private flows,
+pass an explicit source configuration (the Herdr plugin creates one on first
+use):
 
 ```sh
 npm link
 flow-server start
+# Or: flow-server start --source-config ~/.config/flow-server/sources.json --port 4741
 ```
 
 Add this MCP server to Codex:

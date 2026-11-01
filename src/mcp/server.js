@@ -63,13 +63,13 @@ export function startStdioServer(client, { input = process.stdin, output = proce
     let request;
     try {
       request = JSON.parse(line);
-      if (!request.id) {
+      if (request.id === undefined) {
         await handleRequest(client, request);
         return;
       }
       output.write(`${JSON.stringify({ jsonrpc: "2.0", id: request.id, result: await handleRequest(client, request) })}\n`);
     } catch (error) {
-      if (request?.id) output.write(`${JSON.stringify({ jsonrpc: "2.0", id: request.id, error: { code: -32603, message: error.message || "Internal MCP error." } })}\n`);
+      if (request?.id !== undefined) output.write(`${JSON.stringify({ jsonrpc: "2.0", id: request.id, error: { code: -32603, message: error.message || "Internal MCP error." } })}\n`);
       else errorOutput.write(`flow-mcp: ${error.message || "Invalid request."}\n`);
     }
   });

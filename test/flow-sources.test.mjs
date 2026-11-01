@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -111,7 +111,7 @@ test("flow source service exposes non-secret status and resolves canonical run i
     let commit = "a".repeat(40);
     const service = new FlowSourceService({ configPath, gitIdentity: async () => ({ commit, branch: "main" }) });
     await service.initialize();
-    assert.deepEqual(await service.status(), [{ id: "personal", mode: "git", path: flows, workspaceRoots: [workspace], remote: "origin", branch: "main", currentBranch: "main", gitCommit: "a".repeat(40), sync: { pull: "confirm", push: "manual" } }]);
+    assert.deepEqual(await service.status(), [{ id: "personal", mode: "git", path: await realpath(flows), workspaceRoots: [await realpath(workspace)], remote: "origin", branch: "main", currentBranch: "main", gitCommit: "a".repeat(40), sync: { pull: "confirm", push: "manual" } }]);
     const listed = await service.list();
     assert.equal(listed[0].sourceId, "personal");
     assert.equal(listed[0].profileId, "personal");

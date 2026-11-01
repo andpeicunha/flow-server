@@ -102,6 +102,23 @@ Personal flows stay in explicitly configured local directories. A source may be
 `local` or a local `git` worktree owned by the developer. `flow-server` never
 searches `$HOME`, stores Git credentials, or requires a remote service.
 
+### Herdr plugin
+
+After this change is merged, install it with `herdr plugin install
+andpeicunha/flow-server -y`. For a local checkout, use `herdr plugin link
+/absolute/path/to/flow-server --enabled`. The plugin package includes the local service, CLI, schemas,
+Skills, and starter flow. It does not install or activate private flows.
+
+Open the `Flow Server` pane. On first use, choose an existing local flow
+directory and an optional workspace directory. The plugin saves only source
+metadata in `~/.config/flow-server/sources.json`, starts a loopback service, and
+shows local flows and guided runs. It never starts an agent by itself. Use the
+local `flow-server` MCP from your agent to advance a guided run and checkpoint
+node output. See [docs/codex-mcp.md](docs/codex-mcp.md) for the MCP setup.
+
+The old `flow-tui-bridge` is a legacy reference. Do not register or call it for
+new runs.
+
 Create an owner-only JSON or restricted YAML configuration. Use local workspace
 roots to associate repositories with private profiles:
 
