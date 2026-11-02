@@ -16,8 +16,11 @@
     "task": { "type": "string", "maxLength": 65536 },
     "runtime": { "enum": ["codex", "claude"] },
     "executionMode": { "enum": ["guided", "direct"] },
-    "status": { "enum": ["created", "running", "paused", "stopped", "completed", "failed"] },
-    "createdAt": { "type": "string", "format": "date-time" }
+    "status": { "enum": ["created", "running", "paused", "blocked", "stopped", "completed", "failed"] },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "block": { "type": "object", "additionalProperties": false, "required": ["reason", "recordedAt"], "properties": { "reason": { "type": "string", "maxLength": 2000 }, "details": { "type": "string", "maxLength": 2000 }, "nodeId": { "type": "string" }, "recordedAt": { "type": "string", "format": "date-time" } } },
+    "blockHistory": { "type": "array", "items": { "type": "object" } },
+    "stop": { "type": "object" }
   },
   "allOf": [{ "if": { "required": ["flowSourceId"] }, "then": { "required": ["profileId"] } }]
 }

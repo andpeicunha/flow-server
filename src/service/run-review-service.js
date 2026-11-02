@@ -17,7 +17,7 @@ function nodeSummary(receipts) {
     const current = byNode.get(receipt.nodeId) ?? { nodeId: receipt.nodeId, receipts: 0, completed: 0, failed: 0, skipped: 0, retries: 0, durations: [], validationFailures: 0, signals: 0, missingMetrics: 0 };
     current.receipts += 1;
     current[receipt.status] += 1;
-    current.retries += Math.max(0, (receipt.attempt ?? 1) - 1);
+    current.retries += (receipt.attempt ?? 1) > 1 ? 1 : 0;
     if (Number.isInteger(receipt.durationMs)) current.durations.push(receipt.durationMs);
     else current.missingMetrics += 1;
     if (receipt.validation?.result === "failed") current.validationFailures += 1;
@@ -69,19 +69,20 @@ export class RunReviewService {
 
     const runsWithReceipts = await Promise.all(selected.map(async (run) => {
       const receipts = await this.stateStore.listReceipts(run.id);
+      const history = this.stateStore.listArchivedReceipts ? await this.stateStore.listArchivedReceipts(run.id) : [];
       const expected = Array.isArray(run.flowDefinition?.nodes) ? new Set(run.flowDefinition.nodes.map((node) => node.id)) : undefined;
       if (expected?.size > maxReviewNodes) throw new FlowError("FLOW_REVIEW_EVIDENCE_LIMIT", `Flow review supports at most ${maxReviewNodes} expected nodes.`);
       const actual = new Set(receipts.map((receipt) => receipt.nodeId));
       const missingNodeIds = expected ? [...expected].filter((nodeId) => !actual.has(nodeId)).sort() : [];
       const unexpectedNodeIds = expected ? [...actual].filter((nodeId) => !expected.has(nodeId)).sort() : [];
-      return { run, receipts, evidence: { runId: run.id, completeness: expected ? (missingNodeIds.length || unexpectedNodeIds.length ? "incomplete" : "complete") : "unknown", missingNodeIds, unexpectedNodeIds } };
+      return { run, receipts, history, evidence: { runId: run.id, completeness: expected ? (missingNodeIds.length || unexpectedNodeIds.length ? "incomplete" : "complete") : "unknown", missingNodeIds, unexpectedNodeIds } };
     }));
     const groups = new Map();
     for (const item of runsWithReceipts) {
       const key = item.run.flowContentHash ?? "unversioned";
       const group = groups.get(key) ?? { flowContentHash: key, runs: [], receipts: [] };
       group.runs.push(item.run);
-      group.receipts.push(...item.receipts);
+      group.receipts.push(...item.receipts, ...item.history);
       groups.set(key, group);
     }
     const versions = [...groups.values()].map((group) => {

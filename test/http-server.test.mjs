@@ -241,6 +241,20 @@ test("CLI starts, inspects, and stops a local service without adapters", async (
   }
 });
 
+test("CLI preserves a live service lock when its port does not answer", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "flow-cli-lock-test-"));
+  const owner = JSON.stringify({ pid: process.pid, instanceId: "existing" });
+  try {
+    await mkdir(join(directory, "service.lock"));
+    await writeFile(join(directory, "service.lock", "owner.json"), owner);
+    await assert.rejects(execFile(process.execPath, [cli, "start", "--state-dir", directory, "--port", "47999"]), /active process/);
+    assert.equal(await readFile(join(directory, "service.lock", "owner.json"), "utf8"), owner);
+    await assert.rejects(readFile(join(directory, "service.json"), "utf8"), { code: "ENOENT" });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("flow CLI uses the local API and requires explicit direct-mode approval", async () => {
   const directory = await mkdtemp(join(tmpdir(), "flow-client-test-"));
   const flows = join(directory, "flows");

@@ -51,6 +51,21 @@ function startService() {
   if (result.status !== 0) throw new Error((result.stderr || result.stdout || "flow-server failed to start").trim());
 }
 
+function checkSetup(flowId = "", profileId = "") {
+  const args = [join(packageRoot, "src/cli/flow-server.mjs"), "doctor", "--state-dir", stateDir, "--source-config", configPath];
+  if (flowId) args.push("--flow", flowId);
+  if (profileId) args.push("--profile", profileId);
+  const result = spawnSync(process.execPath, args, { encoding: "utf8" });
+  let report;
+  try { report = JSON.parse(result.stdout || "null"); }
+  catch { throw new Error(`Flow setup check failed: ${(result.stderr || result.stdout || "doctor did not return a report").trim()}`); }
+  if (result.status !== 0 || report?.status !== "ready_for_run_test") {
+    const failed = report?.checks?.filter((item) => item.status === "failed").map((item) => `${item.name}: ${item.reason || "failed"}`).join("; ");
+    throw new Error(`Flow setup is not ready: ${failed || result.stderr || "doctor failed"}. Run flow-server doctor before creating a run.`);
+  }
+  return report;
+}
+
 function items(value) {
   return Array.isArray(value) ? value : value.items || [];
 }
@@ -77,6 +92,7 @@ async function main() {
           console.log(JSON.stringify(selection, null, 2));
           continue;
         }
+        checkSetup(selection.flowId, selection.profileId);
         const runtime = await ask("Agent runtime (codex/claude)", selection.runtime || "codex");
         if (!["codex", "claude"].includes(runtime)) throw new Error("Runtime must be codex or claude.");
         const run = await client.startGuided({ flowId: selection.flowId, profileId: selection.profileId, workspace, runtime, task });
@@ -91,11 +107,7 @@ async function main() {
         console.log(await readFile(join(packageRoot, "docs", "guia-rapido.md"), "utf8"));
       } else if (command === "7") {
         const flowId = await ask("Flow ID (blank for all)");
-        const args = [join(packageRoot, "src/cli/flow-server.mjs"), "doctor", "--state-dir", stateDir, "--source-config", configPath];
-        if (flowId) args.push("--flow", flowId);
-        const result = spawnSync(process.execPath, args, { encoding: "utf8" });
-        console.log(result.stdout.trim());
-        if (result.stderr.trim()) console.error(result.stderr.trim());
+        console.log(JSON.stringify(checkSetup(flowId), null, 2));
       } else if (command === "3" || command === "4") {
         const runId = await ask("Run ID");
         console.log(JSON.stringify(command === "3" ? await client.inspect(runId) : await client.audit(runId), null, 2));

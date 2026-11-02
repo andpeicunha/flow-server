@@ -4,7 +4,22 @@ import { transitionRun } from "../core/lifecycle.js";
 import { isRfc3339DateTime } from "../core/date-time.js";
 import { planFlowNext } from "./flow-scheduler.js";
 
-const publicRun = ({ workspace, flowDefinition, ...run }) => run;
+const publicRun = ({ workspace, flowDefinition, retry, ...run }) => run;
+
+function predecessorsOf(flow, nodeId) {
+  const byId = new Map(flow.nodes.map((node) => [node.id, node]));
+  const found = new Set();
+  const visit = (id) => {
+    const node = byId.get(id);
+    for (const parent of [...(node?.after ?? node?.dependsOn ?? []), ...(node?.when?.step ? [node.when.step] : [])]) {
+      if (found.has(parent)) continue;
+      found.add(parent);
+      visit(parent);
+    }
+  };
+  visit(nodeId);
+  return [...found].sort();
+}
 
 export class RunService {
   constructor({ stateStore, flowResolver, now = () => new Date().toISOString(), createId = () => `run_${randomUUID()}` } = {}) {
@@ -12,6 +27,20 @@ export class RunService {
     this.now = now;
     this.createId = createId;
     this.flowResolver = flowResolver;
+    this.runLocks = new Map();
+  }
+
+  async lockRun(id, operation) {
+    const previous = this.runLocks.get(id) ?? Promise.resolve();
+    let release;
+    const current = new Promise((resolve) => { release = resolve; });
+    this.runLocks.set(id, current);
+    await previous;
+    try { return await operation(); }
+    finally {
+      release();
+      if (this.runLocks.get(id) === current) this.runLocks.delete(id);
+    }
   }
 
   async list({ flowId, profileId, runId } = {}) {
@@ -26,6 +55,66 @@ export class RunService {
       if (error.code === "ENOENT") throw new FlowError("RUN_NOT_FOUND", "The requested run does not exist.");
       throw error;
     }
+  }
+
+  async retryContext(id, nodeId) {
+    const run = await this.stateStore.readRun(id).catch((error) => {
+      if (error.code === "ENOENT") throw new FlowError("RUN_NOT_FOUND", "The requested run does not exist.");
+      throw error;
+    });
+    const node = run.flowDefinition?.nodes?.find((item) => item.id === nodeId);
+    if (!node) throw new FlowError("NODE_NOT_FOUND", "The node is not in the pinned flow definition.");
+    const receipts = await this.stateStore.listReceipts(id);
+    const predecessors = predecessorsOf(run.flowDefinition, nodeId);
+    return {
+      runId: id, nodeId, runStatus: run.status, workspace: run.workspace,
+      failedReceipt: receipts.find((item) => item.nodeId === nodeId),
+      predecessors: predecessors.map((parent) => ({ nodeId: parent, receipt: receipts.find((item) => item.nodeId === parent) ?? null })),
+      otherFailures: receipts.filter((item) => item.status === "failed" && item.nodeId !== nodeId).map((item) => item.nodeId),
+      retryPending: run.retry?.nodeId === nodeId,
+      history: (await this.stateStore.listArchivedReceipts(id)).filter((item) => item.nodeId === nodeId)
+    };
+  }
+
+  retryNode(id, review) { return this.lockRun(id, () => this.retryNodeUnlocked(id, review ?? {})); }
+
+  async retryNodeUnlocked(id, { nodeId, failedRecordedAt, workspace, reviewedNodeIds, worktreeReview, reason } = {}) {
+    const run = await this.stateStore.readRun(id);
+    if (run.status !== "running" && !(run.status === "blocked" && ["DEPENDENCY_FAILED", "NODE_FAILED"].includes(run.block?.reason))) throw new FlowError("RETRY_RUN_NOT_RUNNING", "Only a running run or one blocked by a failed node can retry. Resume a paused run first; terminal runs cannot retry.");
+    if (run.retry) throw new FlowError("RETRY_ALREADY_PENDING", "Complete the pending node retry before requesting another.");
+    const node = run.flowDefinition?.nodes?.find((item) => item.id === nodeId);
+    if (!node) throw new FlowError("NODE_NOT_FOUND", "The node is not in the pinned flow definition.");
+    const receipts = await this.stateStore.listReceipts(id);
+    const failed = receipts.find((item) => item.nodeId === nodeId);
+    if (failed?.status !== "failed") throw new FlowError("RETRY_NODE_NOT_FAILED", "Only a node with a failed receipt can be retried.");
+    if (failedRecordedAt !== failed.recordedAt) throw new FlowError("RETRY_RECEIPT_CHANGED", "The failed receipt changed. Inspect it again before retrying.");
+    if (workspace !== run.workspace || typeof workspace !== "string") throw new FlowError("RETRY_WORKSPACE_MISMATCH", "The retry must use the run's pinned workspace.");
+    const predecessors = predecessorsOf(run.flowDefinition, nodeId);
+    const expected = new Set(predecessors);
+    const reviewed = Array.isArray(reviewedNodeIds) && reviewedNodeIds.every((item) => typeof item === "string") ? new Set(reviewedNodeIds) : undefined;
+    if (!reviewed || reviewed.size !== reviewedNodeIds.length || reviewed.size !== expected.size || [...expected].some((item) => !reviewed.has(item))) {
+      throw new FlowError("RETRY_REVIEW_INCOMPLETE", "Review every predecessor receipt before retrying the failed node.");
+    }
+    if (predecessors.some((parent) => !["completed", "skipped"].includes(receipts.find((item) => item.nodeId === parent)?.status)) ||
+      receipts.some((item) => item.status === "failed" && item.nodeId !== nodeId)) {
+      throw new FlowError("RETRY_PREDECESSOR_UNSAFE", "A predecessor or another node is failed or missing. Resolve the inconsistency before retrying.");
+    }
+    if (typeof worktreeReview !== "string" || !worktreeReview.trim() || worktreeReview.length > 2000 ||
+      typeof reason !== "string" || !reason.trim() || reason.length > 2000) {
+      throw new FlowError("RETRY_REVIEW_INCOMPLETE", "Describe the current worktree evidence and why this node needs a retry.");
+    }
+    const attempt = failed.attempt ?? 1;
+    if (attempt > (node.retry ?? 3)) throw new FlowError("RETRY_LIMIT_REACHED", "This node has reached its configured retry limit.");
+    const retryDecision = { reason, worktreeReview, reviewedNodeIds: predecessors, requestedAt: this.now() };
+    const archivedDecision = await this.stateStore.archiveFailedReceipt(failed, retryDecision);
+    run.retry = { nodeId, attempt: attempt + 1, ...archivedDecision };
+    if (run.status === "blocked") {
+      run.blockHistory = [...(run.blockHistory ?? []), { ...run.block, resolution: reason, resolvedAt: this.now() }];
+      delete run.block;
+      run.status = transitionRun(run.status, "continue");
+    }
+    await this.stateStore.writeRun(run);
+    return { runId: id, nodeId, attempt: run.retry.attempt, status: "ready_for_retry" };
   }
 
   async create({ flowId, profileId, workspace, runtime, executionMode, task, flowSourceId, flowContentHash, flowGitCommit }) {
@@ -52,7 +141,67 @@ export class RunService {
     return publicRun(run);
   }
 
-  async transition(id, action) {
+  transition(id, action) { return this.lockRun(id, () => this.transitionUnlocked(id, action)); }
+
+  block(id, details) { return this.lockRun(id, () => this.blockUnlocked(id, details)); }
+
+  async blockUnlocked(id, { nodeId, reason } = {}) {
+    const run = await this.stateStore.readRun(id);
+    if (run.status !== "running") throw new FlowError("RUN_NOT_RUNNING", "Only a running run can be blocked.");
+    if (typeof reason !== "string" || !reason.trim() || reason.length > 2000) throw new FlowError("INVALID_BLOCK", "Give a short reason for the block.");
+    if (typeof nodeId !== "string" || !run.flowDefinition?.nodes?.some((node) => node.id === nodeId)) throw new FlowError("INVALID_BLOCK", "Name the pending node in this run.");
+    const receipts = await this.stateStore.listReceipts(id);
+    if (receipts.some((receipt) => receipt.nodeId === nodeId)) throw new FlowError("INVALID_BLOCK", "The pending node already has a receipt. Use the failed-node retry path if it failed.");
+    const planned = planFlowNext(run.flowDefinition, run, receipts);
+    if (planned.status !== "ready" || !planned.nodes.some((node) => node.id === nodeId)) throw new FlowError("BLOCK_NODE_NOT_READY", "Only a ready pending node can be blocked.");
+    run.status = transitionRun(run.status, "block");
+    run.block = { nodeId, reason: reason.trim(), recordedAt: this.now() };
+    await this.stateStore.writeRun(run);
+    return publicRun(run);
+  }
+
+  continueRun(id, resolution) { return this.lockRun(id, () => this.continueRunUnlocked(id, resolution)); }
+
+  async continueRunUnlocked(id, { reason, workspace, worktreeReview, reviewedPredecessors } = {}) {
+    const run = await this.stateStore.readRun(id);
+    if (run.status !== "blocked" || !run.block) throw new FlowError("RUN_NOT_BLOCKED", "This run has no open block.");
+    if (typeof reason !== "string" || !reason.trim() || reason.length > 2000) throw new FlowError("INVALID_RESOLUTION", "Describe what fixed the block before continuing.");
+    const receipts = await this.stateStore.listReceipts(id);
+    const failures = receipts.filter((receipt) => receipt.status === "failed");
+    if (failures.length) {
+      if (reviewedPredecessors !== true || typeof worktreeReview !== "string" || !worktreeReview.trim() || worktreeReview.length > 2000) {
+        throw new FlowError("CONTINUE_REVIEW_REQUIRED", "Review the pinned worktree and completed predecessors before continuing a failed node.");
+      }
+      const failed = failures[0];
+      await this.retryNodeUnlocked(id, {
+        nodeId: failed.nodeId, failedRecordedAt: failed.recordedAt, workspace,
+        reviewedNodeIds: predecessorsOf(run.flowDefinition, failed.nodeId),
+        worktreeReview, reason: reason.trim()
+      });
+      const resumed = await this.stateStore.readRun(id);
+      const plannedRetry = planFlowNext(resumed.flowDefinition, resumed, receipts.filter((receipt) => receipt.nodeId !== failed.nodeId));
+      if (plannedRetry.status !== "ready") throw new FlowError("BLOCK_NOT_RESOLVED", "The failed node is still not ready after the retry review.");
+      return { ...publicRun(resumed), next: this.readyNodesWithAttempt(plannedRetry.nodes, resumed) };
+    }
+    const planned = planFlowNext(run.flowDefinition, run, receipts);
+    if (planned.status === "blocked") throw new FlowError("BLOCK_NOT_RESOLVED", `The flow is still blocked: ${planned.reason}.`);
+    if (planned.status === "stopped") throw new FlowError("RUN_STOP_RULE", "A stop rule applies. Inspect the run before continuing.");
+    if (run.block.nodeId && planned.status === "ready" && !planned.nodes.some((node) => node.id === run.block.nodeId)) {
+      throw new FlowError("BLOCK_NODE_NOT_READY", "The pending node is not ready. Inspect its dependencies before continuing.");
+    }
+    run.blockHistory = [...(run.blockHistory ?? []), { ...run.block, resolution: reason.trim(), resolvedAt: this.now() }];
+    delete run.block;
+    run.status = transitionRun(run.status, "continue");
+    await this.stateStore.writeRun(run);
+    return { ...publicRun(run), next: planned.status === "ready" ? planned.nodes : [] };
+  }
+
+  readyNodesWithAttempt(nodes, run) {
+    return nodes.map((node) => run.retry?.nodeId === node.id ? { ...node, attempt: run.retry.attempt } : node);
+  }
+
+  async transitionUnlocked(id, action) {
+    if (["block", "continue"].includes(action)) throw new FlowError("INVALID_LIFECYCLE_TRANSITION", "Use flow_block or flow_continue with a reason.");
     const existing = await this.stateStore.readRun(id).catch((error) => {
       if (error.code === "ENOENT") throw new FlowError("RUN_NOT_FOUND", "The requested run does not exist.");
       throw error;
@@ -66,7 +215,9 @@ export class RunService {
     return publicRun(run);
   }
 
-  async checkpoint(id, receipt) {
+  checkpoint(id, receipt) { return this.lockRun(id, () => this.checkpointUnlocked(id, receipt)); }
+
+  async checkpointUnlocked(id, receipt) {
     const run = await this.stateStore.readRun(id).catch((error) => {
       if (error.code === "ENOENT") throw new FlowError("RUN_NOT_FOUND", "The requested run does not exist.");
       throw error;
@@ -75,8 +226,12 @@ export class RunService {
       throw new FlowError("RUN_NOT_ACTIVE", "Cannot checkpoint a terminal run.");
     }
     if (run.status === "paused") throw new FlowError("RUN_PAUSED", "Resume the run before checkpointing a node.");
+    if (run.status === "blocked") throw new FlowError("RUN_BLOCKED", `Resolve the block before checkpointing: ${run.block?.reason ?? "unknown reason"}`);
     if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) throw new FlowError("INVALID_RECEIPT", "Receipt must be a JSON object.");
     if (receipt.runId !== id) throw new FlowError("INVALID_RECEIPT", "Receipt runId does not match the target run.");
+    if (run.retry && (receipt.nodeId !== run.retry.nodeId || receipt.attempt !== run.retry.attempt)) {
+      throw new FlowError("RETRY_ATTEMPT_REQUIRED", "Checkpoint the pending retry node with its required attempt number first.");
+    }
     if (run.flowDefinition?.nodes) {
       if (receipt.status === "skipped") throw new FlowError("SCHEDULER_OWNS_SKIPS", "Conditional skips are recorded by flow_next, not by node agents.");
       const planned = await this.planNextForRun(run);
@@ -95,6 +250,17 @@ export class RunService {
     }
     this.validateReceiptEvidence(receipt);
     await this.stateStore.writeReceipt(receipt);
+    const hadRetry = Boolean(run.retry);
+    if (hadRetry) {
+      delete run.retry;
+    }
+    if (receipt.status === "failed") {
+      run.status = transitionRun(run.status, "block");
+      const details = typeof receipt.summary === "string" && receipt.summary.trim() ? receipt.summary.trim()
+        : typeof receipt.output?.reason === "string" && receipt.output.reason.trim() ? receipt.output.reason.trim() : undefined;
+      run.block = { reason: "NODE_FAILED", nodeId: receipt.nodeId, recordedAt: this.now(), ...(details ? { details: details.slice(0, 2000) } : {}) };
+    }
+    if (receipt.status === "failed" || hadRetry) await this.stateStore.writeRun(run);
     return publicRun(run);
   }
 
@@ -149,32 +315,48 @@ export class RunService {
     }
   }
 
-  async next(id) {
+  next(id) { return this.lockRun(id, () => this.nextUnlocked(id)); }
+
+  async nextUnlocked(id) {
     let run = await this.stateStore.readRun(id).catch((error) => {
       if (error.code === "ENOENT") throw new FlowError("RUN_NOT_FOUND", "The requested run does not exist.");
       throw error;
     });
     if (run.status === "completed") return { status: "done", nodes: [] };
-    if (["stopped", "failed"].includes(run.status)) return { status: "blocked", reason: "RUN_TERMINAL", runStatus: run.status };
+    if (["stopped", "failed"].includes(run.status)) return { status: "blocked", reason: "RUN_TERMINAL", runStatus: run.status, ...(run.stop ? { stop: run.stop } : {}) };
     if (run.status === "paused") return { status: "blocked", reason: "RUN_PAUSED", runStatus: run.status };
+    if (run.status === "blocked") return { status: "blocked", reason: run.block?.reason ?? "RUN_BLOCKED", nodeId: run.block?.nodeId, ...(run.block?.details ? { details: run.block.details } : {}), runStatus: run.status, action: "Resolve the issue, then call flow_continue." };
     if (run.status === "created") {
       run = { ...run, status: transitionRun(run.status, "start") };
       await this.stateStore.writeRun(run);
+    }
+    if (run.retry) {
+      const current = (await this.stateStore.listReceipts(id)).find((item) => item.nodeId === run.retry.nodeId);
+      if (current && current.status !== "failed" && current.attempt === run.retry.attempt) {
+        delete run.retry;
+        await this.stateStore.writeRun(run);
+      }
     }
     if (!run.flowDefinition?.nodes) throw new FlowError("FLOW_DEFINITION_NOT_FOUND", "This run has no pinned flow definition.");
     const { result, skippedNodeIds } = await this.planNextForRun(run);
     if (result.status === "stopped") {
       run = { ...run, status: transitionRun(run.status, "stop") };
+      run.stop = result.stop;
+      await this.stateStore.writeRun(run);
+    } else if (result.status === "blocked") {
+      run = { ...run, status: transitionRun(run.status, "block"), block: { reason: result.reason, ...(result.nodeId ? { nodeId: result.nodeId } : {}), recordedAt: this.now() } };
       await this.stateStore.writeRun(run);
     } else if (result.status === "done") {
       run = { ...run, status: transitionRun(run.status, "complete") };
       await this.stateStore.writeRun(run);
     }
-    return { ...result, ...(skippedNodeIds.length ? { skipped: skippedNodeIds } : {}) };
+    return { ...result, ...(result.status === "ready" ? { nodes: this.readyNodesWithAttempt(result.nodes, run) } : {}), ...(skippedNodeIds.length ? { skipped: skippedNodeIds } : {}) };
   }
 
   async planNextForRun(run) {
-    const receipts = await this.stateStore.listReceipts(run.id);
+    const stored = await this.stateStore.listReceipts(run.id);
+    const receipts = run.retry && stored.some((item) => item.nodeId === run.retry.nodeId && item.status === "failed")
+      ? stored.filter((item) => item.nodeId !== run.retry.nodeId) : stored;
     const planned = planFlowNext(run.flowDefinition, run, receipts);
     const skippedNodeIds = [];
     for (const skipped of planned.skipped ?? []) {
@@ -187,7 +369,9 @@ export class RunService {
       await this.stateStore.writeReceipt(receipt);
       skippedNodeIds.push(skipped.nodeId);
     }
-    const allReceipts = skippedNodeIds.length ? await this.stateStore.listReceipts(run.id) : receipts;
+    const allStored = skippedNodeIds.length ? await this.stateStore.listReceipts(run.id) : receipts;
+    const allReceipts = run.retry && allStored.some((item) => item.nodeId === run.retry.nodeId && item.status === "failed")
+      ? allStored.filter((item) => item.nodeId !== run.retry.nodeId) : allStored;
     const result = skippedNodeIds.length ? planFlowNext(run.flowDefinition, run, allReceipts) : planned;
     return { result, skippedNodeIds };
   }
@@ -196,6 +380,7 @@ export class RunService {
     await this.get(id);
     const run = await this.stateStore.readRun(id);
     const receipts = await this.stateStore.listReceipts(id);
+    const retryHistory = this.stateStore.listArchivedReceipts ? await this.stateStore.listArchivedReceipts(id) : [];
     const findings = receipts
       .filter((receipt) => receipt.status === "failed")
       .map((receipt) => ({ code: "NODE_FAILED", nodeId: receipt.nodeId }));
@@ -208,9 +393,12 @@ export class RunService {
     }
     if (run.status === "failed") findings.push({ code: "RUN_FAILED" });
     if (run.status === "stopped") findings.push({ code: "RUN_STOPPED" });
+    if (run.status === "blocked") findings.push({ code: "RUN_BLOCKED", ...(run.block?.nodeId ? { nodeId: run.block.nodeId } : {}), reason: run.block?.reason });
     if (!["completed", "failed", "stopped"].includes(run.status)) findings.push({ code: "RUN_INCOMPLETE" });
     const result = run.status === "failed" || receipts.some((receipt) => receipt.status === "failed") ? "failed"
       : run.status === "completed" && run.flowDefinition?.nodes && findings.length === 0 ? "passed" : "incomplete";
-    return { schemaVersion: "v1", runId: id, result, findings };
+    return { schemaVersion: "v1", runId: id, result, findings,
+      ...(run.blockHistory?.length ? { blockHistory: run.blockHistory } : {}),
+      ...(retryHistory.length ? { retryHistory: retryHistory.map((receipt) => ({ nodeId: receipt.nodeId, attempt: receipt.attempt ?? 1, status: receipt.status, recordedAt: receipt.recordedAt, reason: receipt.retryDecision?.reason, reviewedNodeIds: receipt.retryDecision?.reviewedNodeIds })) } : {}) };
   }
 }

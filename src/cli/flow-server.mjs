@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { resolveStateDir } from "../core/state-dir.js";
 import { diagnoseFlowSetup } from "../service/doctor-service.js";
 import { ServiceHost } from "../service/service-host.js";
+import { checkBeforeStart } from "../service/startup-check.js";
 
 const commands = new Set(["start", "status", "stop", "doctor", "serve"]);
 
@@ -50,34 +51,31 @@ async function serve(configuration) {
 }
 
 async function start(configuration) {
-  try {
-    const running = await health(`http://127.0.0.1:${configuration.port}`);
-    if ((running.sourceConfig || configuration.sourceConfig) && running.sourceConfig !== configuration.sourceConfig) {
-      throw new Error("flow-service is already running with a different source configuration.");
-    }
-    console.log(JSON.stringify(running));
-    return;
-  } catch (error) {
-    if (String(error?.message || "").includes("different source configuration")) throw error;
-    /* Start a new local service. */
-  }
+  const check = await checkBeforeStart(configuration);
+  if (check.action === "ready") { console.log(JSON.stringify(check.running)); return; }
   const childArguments = [fileURLToPath(import.meta.url), "serve", "--state-dir", configuration.stateDir, "--port", String(configuration.port)];
   if (configuration.sourceConfig) childArguments.push("--source-config", configuration.sourceConfig);
   const child = spawn(process.execPath, childArguments, { detached: true, stdio: "ignore" });
   child.unref();
-  for (let attempt = 0; attempt < 20; attempt += 1) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 100));
     try {
       console.log(JSON.stringify(await health(`http://127.0.0.1:${configuration.port}`)));
       return;
     } catch { /* Wait for the child. */ }
   }
-  throw new Error("flow-service did not become healthy within 2 seconds.");
+  throw new Error("flow-service did not become healthy within 10 seconds. Check flow-server doctor and the service lock; do not remove a lock owned by an active process.");
 }
 
 async function status(configuration) {
   const info = await metadata(configuration.stateDir);
-  const result = await health(info.endpoint);
+  let result;
+  try { result = await health(info.endpoint); }
+  catch (error) {
+    const code = error?.cause?.code;
+    if (["EPERM", "EACCES"].includes(code)) throw new Error("Cannot access the local flow-service from this session (loopback blocked). The service may still be running.");
+    throw new Error(`Cannot reach the recorded flow-service: ${error.message}. Check its process and port before starting another service.`);
+  }
   console.log(JSON.stringify(result));
   return result;
 }

@@ -116,9 +116,13 @@ export function createHttpServer({ runService, runReviewService, flowSourceServi
       if (request.method === "GET" && url.pathname === "/v1/sources") return send(response, 200, { items: flowSourceService ? await flowSourceService.status() : [] });
       if (request.method === "GET" && url.pathname === "/v1/runs") return send(response, 200, page(await runService.list({ flowId: url.searchParams.get("flowId") || undefined, profileId: url.searchParams.get("profileId") || undefined, runId: url.searchParams.get("runId") || undefined }), url));
 
-      const runMatch = url.pathname.match(/^\/v1\/runs\/(run_[a-z0-9-]{1,63})(?:\/(checkpoint|lifecycle|audit|next))?$/);
+      const runMatch = url.pathname.match(/^\/v1\/runs\/(run_[a-z0-9-]{1,63})(?:\/(checkpoint|lifecycle|audit|next|retry|block|continue))?$/);
       if (request.method === "GET" && runMatch?.[2] === undefined) return send(response, 200, await runService.get(runMatch[1]));
       if (request.method === "GET" && runMatch?.[2] === "audit") return send(response, 200, await runService.audit(runMatch[1]));
+      if (request.method === "GET" && runMatch?.[2] === "retry") {
+        if (!(await token.matches(request.headers["x-flow-local-token"]))) throw new FlowError("UNAUTHORIZED", "A valid local service token is required.");
+        return send(response, 200, await runService.retryContext(runMatch[1], url.searchParams.get("nodeId")));
+      }
 
       const body = request.method === "POST" ? await readJson(request) : undefined;
       if (request.method === "POST" && url.pathname === "/v1/runs") {
@@ -145,6 +149,18 @@ export function createHttpServer({ runService, runReviewService, flowSourceServi
       }
       if (request.method === "POST" && runMatch?.[2] === "checkpoint") {
         const result = await mutation(request, body, async () => ({ status: 200, body: await runService.checkpoint(runMatch[1], body.receipt ?? {}) }));
+        return send(response, result.status, result.body);
+      }
+      if (request.method === "POST" && runMatch?.[2] === "retry") {
+        const result = await mutation(request, body, async () => ({ status: 200, body: await runService.retryNode(runMatch[1], body) }));
+        return send(response, result.status, result.body);
+      }
+      if (request.method === "POST" && runMatch?.[2] === "block") {
+        const result = await mutation(request, body, async () => ({ status: 200, body: await runService.block(runMatch[1], body) }));
+        return send(response, result.status, result.body);
+      }
+      if (request.method === "POST" && runMatch?.[2] === "continue") {
+        const result = await mutation(request, body, async () => ({ status: 200, body: await runService.continueRun(runMatch[1], body) }));
         return send(response, result.status, result.body);
       }
       if (request.method === "POST" && runMatch?.[2] === "next") {

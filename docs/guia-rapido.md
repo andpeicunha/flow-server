@@ -17,12 +17,17 @@ agentes sozinho.
    alteração, para `~/.local/share/flow-server/legacy-runs`.
 2. Instale os comandos com `npm link` na pasta deste repositório e configure o
    MCP `flow-server` no Codex. Veja os comandos em [Configurar o MCP](codex-mcp.md).
-3. Confira o serviço com `flow-server status`. Se estiver parado, abra o painel
-   ou inicie `flow-server start --source-config ~/.config/flow-server/sources.json --port 4741`.
+3. Abra o painel. Ele confere o serviço e o inicia se estiver parado e sem um
+   lock de processo ativo. Antes de criar um run, ele executa o diagnóstico.
+   Também pode conferir manualmente com `flow-server status` e iniciar com
+   `flow-server start --source-config ~/.config/flow-server/sources.json --port 4741`.
 4. Use **7 Doctor** no painel ou `flow-server doctor` para conferir serviço,
    fonte, MCP do Codex ou Claude e Skills do runtime escolhido. O diagnóstico não inicia runs nem testa modelos;
    ele mostra o acesso aos modelos como `not_tested`. Para checar só um flow,
    use `flow-server doctor --profile ahkta --flow sdd-ahkta`.
+5. Na sessão do agente, confirme que a tool `flow_list` aparece. O doctor
+   confere o registro do MCP, mas não consegue confirmar se esta sessão carregou
+   suas tools. Se elas não aparecerem após configurar o MCP, abra uma nova sessão.
 
 ### Escolher o runtime nesta máquina
 
@@ -61,10 +66,60 @@ OpenRouter, configure o cliente escolhido e use no mapa os IDs aceitos por ele.
    recebidas e salva o resultado real com `flow_checkpoint`. Depois chama
    `flow_next` novamente. Repete até terminar ou encontrar um bloqueio.
 
+Veja o [diagrama de sequência com cores](../README.md#guided-run-sequence).
+A parte verde representa uma volta por nó: receber as instruções, executar e
+registrar o resultado. Se o run bloquear, a parte amarela mostra como retomar
+somente o nó pendente. O Test Auditor só aparece se estiver definido no YAML.
+
 Um checkpoint identifica o run e o nó, registra se terminou ou falhou e pode
 guardar uma saída curta. Por exemplo, um nó de decisão pode registrar
 `output: { "decision": "ready" }`. Essa saída permite que o próximo nó siga
 o caminho correto. Não registre um resultado que não aconteceu.
+
+O formato de `flow_checkpoint` é este (substitua os valores pelo resultado real):
+
+```json
+{
+  "runId": "run_exemplo",
+  "receipt": {
+    "schemaVersion": "v1",
+    "runId": "run_exemplo",
+    "nodeId": "gate0_check",
+    "status": "completed",
+    "recordedAt": "2026-11-02T14:00:00Z",
+    "model": "provider/modelo-configurado",
+    "effort": "low",
+    "output": { "decision": "continue", "reason": "Motivo real" }
+  }
+}
+```
+
+Use `completed` ou `failed` no checkpoint. `flow_next` registra os nós
+ignorados. Campos como `decision`, `reason` e `evidence` ficam dentro de
+`receipt.output`; campos extras no nível de `receipt` são rejeitados.
+
+### Resolver um bloqueio e continuar
+
+Quando um nó não pode rodar, o agente registra o motivo com `flow_block`.
+Se o próprio nó falhou, o checkpoint registra o bloqueio. O dev resolve o
+problema e pede: **“continue o mesmo flow”**.
+
+O agente confere o worktree e os nós anteriores. Se algum resultado anterior
+estiver incorreto, ele para e explica o problema. Se estiver tudo certo, chama
+`flow_continue` com o motivo da correção. Para um nó que já falhou, também
+informa o worktree fixado, um resumo da revisão e confirma que conferiu os
+nós anteriores. O plugin guarda a tentativa falha, prepara outra e devolve o
+mesmo nó com o número `attempt` para o
+próximo `flow_checkpoint`. O dev não precisa fornecer horários ou IDs de
+recibos. Nenhum nó concluído roda de novo.
+
+Exemplo: `gate0_check` parou por falta de acesso. O dev corrige o acesso; o
+agente confere e continua em `gate0_check`. Se uma revisão externa ainda
+rejeitar a ação, o agente mantém o run parado. O limite padrão é de três
+novas tentativas por nó; o flow pode definir outro limite em `retry`.
+
+Um run pausado precisa de `flow_lifecycle` com `resume`. Um run `stopped` é
+definitivo: o campo `stop` em `flow_inspect` mostra o motivo e o próximo passo.
 
 O plugin exige que o checkpoint de um nó concluído informe o modelo e o effort
 configurados. Ele não inicia o agente nem comprova sozinho qual modelo foi
@@ -113,6 +168,11 @@ Skill `flow-performance-review`. A tool reúne evidências de runs encerrados; a
 Skill ajuda o agente a interpretar o relatório e propor melhorias. Nenhuma
 proposta altera o flow por conta própria.
 
-Se o serviço não responder, confira `flow-server status`. Se `flow_select`
+Se aparecer `fetch failed` ou `MCP_SERVICE_UNAVAILABLE`, confira
+`flow-server status` e `flow-server doctor`. Uma sessão pode bloquear o acesso
+ao endereço local mesmo quando o serviço está saudável em outra sessão. Se
+`start` apontar lock de processo ativo, confira processo, porta e acesso da
+sessão; não apague o lock nem inicie outro serviço. O painel também interrompe
+a criação do run quando o diagnóstico falha. Se `flow_select`
 pedir confirmação, escolha o flow antes de criar o run. Se a auditoria mostrar
 evidência faltando, confira os checkpoints em `flow_inspect`.

@@ -32,11 +32,11 @@ export class LocalFlowClient {
     };
   }
 
-  async request(path, { method = "GET", body, mutate = false } = {}) {
+  async request(path, { method = "GET", body, mutate = false, privateRead = false } = {}) {
     const connection = await this.connection();
     const headers = body === undefined ? {} : { "content-type": "application/json" };
+    if (mutate || privateRead) headers["x-flow-local-token"] = connection.token;
     if (mutate) {
-      headers["x-flow-local-token"] = connection.token;
       headers["idempotency-key"] = this.idempotencyKey();
     }
     let response;
@@ -53,6 +53,10 @@ export class LocalFlowClient {
   list(profileId) { return this.request(`/v1/flows${profileId ? `?profileId=${encodeURIComponent(profileId)}` : ""}`); }
   selectFlow(selection) { return this.request("/v1/flow-selection", { method: "POST", mutate: true, body: selection }); }
   inspect(runId) { return this.request(`/v1/runs/${encodeURIComponent(runId)}`); }
+  retryInspect(runId, nodeId) { return this.request(`/v1/runs/${encodeURIComponent(runId)}/retry?nodeId=${encodeURIComponent(nodeId)}`, { privateRead: true }); }
+  retryNode(runId, review) { return this.request(`/v1/runs/${encodeURIComponent(runId)}/retry`, { method: "POST", mutate: true, body: review }); }
+  block(runId, details) { return this.request(`/v1/runs/${encodeURIComponent(runId)}/block`, { method: "POST", mutate: true, body: details }); }
+  continueRun(runId, resolution) { return this.request(`/v1/runs/${encodeURIComponent(runId)}/continue`, { method: "POST", mutate: true, body: resolution }); }
   audit(runId) { return this.request(`/v1/runs/${encodeURIComponent(runId)}/audit`); }
   review({ flowId, profileId, last = 20, since, contentHash, compareVersions = false }) {
     return this.request("/v1/reviews", { method: "POST", mutate: true, body: {

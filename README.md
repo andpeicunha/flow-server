@@ -101,6 +101,15 @@ files stop cleanup. Historical run logs are moved intact to
 and connects only to the loopback service. Setup instructions are in
 [docs/codex-mcp.md](docs/codex-mcp.md).
 
+Before a guided run, the Herdr pane checks the service, source, MCP registration,
+and required Skills with `doctor`. It does not test model access or confirm that
+the current agent session has loaded the MCP tools. The agent must see
+`flow_list` before starting a run; after registering the MCP, open a new agent
+session if the tools are absent. The pane starts the local service when it is
+confirmed stopped. A blocked loopback connection or a lock owned by a live
+process stops startup with an explanation; the plugin does not remove that lock.
+See [the quick guide](docs/guia-rapido.md) for recovery steps.
+
 ## Local flow sources
 
 Personal flows stay in explicitly configured local directories. A source may be
@@ -182,8 +191,102 @@ The first `flow_next` starts the run. It marks the run complete when all require
 nodes finish; the CLI lifecycle command controls an active run.
 The CLI audit command reports `passed` only for a completed run with evidence for every
 required node.
+For a failed node, the agent reviews predecessor evidence and the pinned
+worktree with `flow_retry_inspect`, then uses `flow_continue`. The service
+archives the failed attempt and returns only that node with a new attempt
+number. Completed nodes stay unchanged. See the [quick guide](docs/guia-rapido.md).
+If a ready node cannot run before a receipt is saved, `flow_block` records its
+reason and pending node. After the developer fixes the issue, `flow_continue`
+records the resolution and returns that node in the same run. `flow_next` also
+records blocks found in dependencies. A stopped run keeps its stop rule in
+`flow_inspect`, so the developer can see why it ended.
 
 For the full sequence in plain language, see the [quick guide](docs/guia-rapido.md).
+
+### Guided run sequence
+
+The green section repeats for each ready node in the flow YAML. The server
+tracks progress; the agent does the work. Colors show setup (blue), node work
+(green), a block (red), continuation (yellow), and optional independent
+verification (purple).
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Dev as Developer
+    participant Agent as Flow agent
+    participant MCP as Plugin / MCP
+    participant Server as Flow Server
+    participant Node as Node agent
+
+    rect rgb(224, 238, 255)
+        Dev->>Agent: Describe the task
+        Agent->>MCP: flow_select
+        MCP->>Server: Select profile and flow YAML
+        Server-->>Agent: Selected flow
+        Agent->>Agent: Check the worktree
+        Agent->>MCP: flow_start_guided
+        MCP->>Server: Create the run
+    end
+
+    rect rgb(225, 245, 230)
+        loop For each ready node while the run can advance
+            Agent->>MCP: flow_next
+            MCP->>Server: Find ready nodes
+            Server-->>Agent: Node, agent, Skills, and prompt
+            Note over Agent,Node: Example: repo_preflight, then intake, then gate0_check
+            Agent->>Node: Execute this node
+            Node-->>Agent: Result and evidence
+            alt Completed
+                Agent->>MCP: flow_checkpoint(completed)
+                MCP->>Server: Save the receipt
+            else Failed
+                Agent->>MCP: flow_checkpoint(failed)
+                MCP->>Server: Save failure and block the run
+            else Stopped before a checkpoint
+                Agent->>MCP: flow_block(node, reason)
+                MCP->>Server: Save the block
+            end
+        end
+    end
+
+    rect rgb(255, 232, 232)
+        opt The run is blocked
+            Server-->>Agent: Pending node and reason
+            Agent-->>Dev: Explain what needs to be fixed
+        end
+    end
+
+    rect rgb(255, 246, 210)
+        opt The developer resolves the block
+            Dev->>Agent: Continue the same run
+            opt The node has a failed receipt
+                Agent->>MCP: flow_retry_inspect
+                MCP-->>Agent: Failure, worktree, and prior receipts
+                Agent->>Agent: Review worktree and completed predecessors
+            end
+            Agent->>MCP: flow_continue
+            MCP->>Server: Record resolution and check the retry
+            Server-->>Agent: Same run, pending node, and attempt
+            Agent->>Node: Retry only the pending node
+            Node-->>Agent: New result
+            Agent->>MCP: flow_checkpoint(result, attempt)
+        end
+    end
+
+    rect rgb(239, 230, 250)
+        opt The YAML defines an independent Test Auditor node
+            Agent->>MCP: flow_next
+            Server-->>Agent: Test Auditor node
+            Agent->>Node: Run independent verification
+            Agent->>MCP: flow_checkpoint(result)
+        end
+    end
+```
+
+The Test Auditor runs only when the flow YAML defines that node. A `stopped`
+run is final; `flow_inspect` shows which stop rule ended it. Existing runs keep
+their pinned YAML definition when the server is updated.
 
 The installed `flow-source-management` Skill defines safe commit, push, pull,
 and rollback behavior. Pull always requires confirmation. The optional remote

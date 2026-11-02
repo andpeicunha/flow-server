@@ -79,6 +79,8 @@ function readyNode(node, receipts) {
 
 export function planFlowNext(flow, run, receiptList) {
   const receipts = new Map(receiptList.map((receipt) => [receipt.nodeId, receipt]));
+  const failed = receiptList.find((receipt) => receipt.status === "failed");
+  if (failed) return { status: "blocked", reason: "DEPENDENCY_FAILED", nodeId: failed.nodeId };
   for (const rule of flow.stopWhen ?? []) {
     if (!receipts.has(rule.step)) continue;
     if (receipts.get(rule.step).status === "skipped") continue;
