@@ -1,9 +1,9 @@
 id = "andpeicunha.flow-server"
 name = "flow-server"
-version = "0.1.0"
+version = "0.1.1"
 min_herdr_version = "0.7.5"
 platforms = ["macos", "linux"]
-description = "Local flow sources and guided runs through flow-server and its local MCP."
+description = "Local guided flows, validation, audit, and on-demand MCP review."
 
 [[build]]
 platforms = ["macos", "linux"]

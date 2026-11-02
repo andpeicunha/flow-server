@@ -81,6 +81,15 @@ export class RunService {
       if (planned.result.status !== "ready" || !planned.result.nodes.some((node) => node.id === receipt.nodeId)) {
         throw new FlowError("NODE_NOT_READY", "The node is not ready under the pinned flow dependencies, conditions, and stop rules.");
       }
+      const node = run.flowDefinition.nodes.find((item) => item.id === receipt.nodeId);
+      if (receipt.status === "completed" && node?.model) {
+        const expectedModel = node.model;
+        const actualModel = receipt.model;
+        const modelMatches = actualModel === expectedModel || actualModel === expectedModel.split("/").at(-1);
+        if (!modelMatches) throw new FlowError("NODE_MODEL_MISMATCH", "A completed node must record its configured model in the receipt.");
+        const expectedEffort = node.effort ?? node.variant;
+        if (expectedEffort && receipt.effort !== expectedEffort) throw new FlowError("NODE_EFFORT_MISMATCH", "A completed node must record its configured effort in the receipt.");
+      }
     }
     this.validateReceiptEvidence(receipt);
     await this.stateStore.writeReceipt(receipt);

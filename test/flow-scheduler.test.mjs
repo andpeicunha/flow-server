@@ -141,6 +141,26 @@ test("RunService rejects receipts for nodes that bypass dependencies or conditio
   await assert.rejects(service.checkpoint("run_test", skipped), (error) => error.code === "SCHEDULER_OWNS_SKIPS");
 });
 
+test("guided runs require configured model and effort evidence before completing a node", async () => {
+  let run;
+  const receipts = new Map();
+  const stateStore = {
+    writeRun: async (value) => { run = value; },
+    readRun: async () => run,
+    listReceipts: async () => [...receipts.values()],
+    writeReceipt: async (receipt) => { receipts.set(receipt.nodeId, receipt); }
+  };
+  const service = new RunService({ stateStore, flowResolver: async () => ({ flowDefinition: { id: "model-flow", nodes: [{ id: "work", model: "openai/gpt-6-luna", variant: "low" }] } }), createId: () => "run_model", now: () => "2026-01-01T00:00:00.000Z" });
+  await service.create({ flowId: "model-flow", workspace: "/workspace", runtime: "codex", executionMode: "guided" });
+  await service.next("run_model");
+  const receipt = { schemaVersion: "v1", runId: "run_model", nodeId: "work", status: "completed", recordedAt: "2026-01-01T00:00:00.000Z" };
+  await assert.rejects(service.checkpoint("run_model", receipt), { code: "NODE_MODEL_MISMATCH" });
+  await assert.rejects(service.checkpoint("run_model", { ...receipt, model: "gpt-6.1-terra", effort: "low" }), { code: "NODE_MODEL_MISMATCH" });
+  await assert.rejects(service.checkpoint("run_model", { ...receipt, model: "gpt-6-luna", effort: "medium" }), { code: "NODE_EFFORT_MISMATCH" });
+  await service.checkpoint("run_model", { ...receipt, model: "gpt-6-luna", effort: "low" });
+  assert.equal((await service.next("run_model")).status, "done");
+});
+
 test("run audit reports incomplete evidence and accepts scheduler-skipped nodes", async () => {
   let run = { id: "run_test", flowId: "audit-flow", status: "running", flowDefinition: { nodes: [{ id: "optional" }] } };
   const receipts = new Map();

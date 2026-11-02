@@ -61,7 +61,7 @@ async function main() {
   const client = new LocalFlowClient({ stateDir });
   console.log("Flow Server is ready. The local MCP uses this same service.");
   while (true) {
-    console.log("\n1 List flows  2 Start guided run  3 Inspect run  4 Audit run  5 Validate sources  q Quit");
+    console.log("\n1 List flows  2 Start guided run  3 Inspect run  4 Audit run  5 Validate sources  6 Guide  q Quit");
     const command = await ask("Choose");
     if (command === "q") return;
     try {
@@ -87,6 +87,8 @@ async function main() {
         await sourceService.initialize();
         const flows = await sourceService.list();
         console.log(`${flows.length} flow(s) valid across ${sourceService.sources.length} source(s).`);
+      } else if (command === "6") {
+        console.log(await readFile(join(packageRoot, "docs", "guia-rapido.md"), "utf8"));
       } else if (command === "3" || command === "4") {
         const runId = await ask("Run ID");
         console.log(JSON.stringify(command === "3" ? await client.inspect(runId) : await client.audit(runId), null, 2));

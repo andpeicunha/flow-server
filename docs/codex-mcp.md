@@ -1,5 +1,7 @@
 # Codex MCP setup
 
+For the day-to-day sequence, see the [quick guide in Portuguese](guia-rapido.md).
+
 `flow-mcp` is a local stdio MCP server. It reads the local service metadata and
 connects only to `http://127.0.0.1`. It never runs shell commands, reads run
 directories, or starts Codex or Claude adapters.
@@ -35,8 +37,16 @@ Use `flow_list` to inspect flows in a profile, `flow_start_guided` to create a
 selected run. Pass the original task so it appears in node prompts. `flow_next`
 starts the run and returns ready nodes with their configured agent,
 model, effort, executor, Skills, constraints, and prompt. Record node outputs
-with `flow_checkpoint` so conditions and stop rules can be evaluated. Use
-`flow_lifecycle` to pause, resume, stop, or fail a run; completion is automatic.
+with `flow_checkpoint` so conditions and stop rules can be evaluated. For a
+completed node with a configured model, the checkpoint must record the matching
+model and effort. Check the actual runtime settings before saving it.
+
+Use `flow_lifecycle` to pause, resume, stop, or fail a run; completion is automatic.
 Use `flow_inspect` and `flow_audit` for run review. Audit reports `passed` only
 after a completed run has evidence for every required node. `flow_open` remains
 unavailable until the optional viewer is installed.
+
+Only after the maintainer explicitly asks in a separate session, call
+`flow_review` for a completed flow and use the `flow-performance-review` Skill
+to interpret its advisory evidence report. It does not run automatically from
+an active flow or launch an agent.

@@ -16,11 +16,12 @@ async function fixture() {
   const directory = await mkdtemp(join(tmpdir(), "flow-mcp-test-"));
   const token = new LocalToken(directory, { createToken: () => "x".repeat(32) });
   await token.loadOrCreate();
-  const server = createHttpServer({ token, runService: new RunService({ stateStore: new FileStateStore(directory), createId: () => "run_mcp", now: () => "2026-01-01T00:00:00.000Z" }), serviceInfo: () => ({ status: "ready" }) });
+  const server = createHttpServer({ token, runService: new RunService({ stateStore: new FileStateStore(directory), createId: () => "run_mcp", now: () => "2026-01-01T00:00:00.000Z" }), runReviewService: { review: async (input) => ({ advisoryOnly: true, ...input }) }, serviceInfo: () => ({ status: "ready" }) });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const port = server.address().port;
   await new FileStateStore(directory).writeJson(join(directory, "service.json"), { endpoint: `http://127.0.0.1:${port}` });
-  return { directory, server, client: new LocalFlowClient({ stateDir: directory, idempotencyKey: () => "mcp-idempotency-key-001" }) };
+  let requestNumber = 0;
+  return { directory, server, client: new LocalFlowClient({ stateDir: directory, idempotencyKey: () => `mcp-idempotency-key-${++requestNumber}` }) };
 }
 
 test("flow-mcp uses only the local service for guided runs and audits", async () => {
@@ -32,6 +33,8 @@ test("flow-mcp uses only the local service for guided runs and audits", async ()
     assert.equal((await context.client.inspect("run_mcp")).task, "Keep the original task");
     assert.equal((await context.client.inspect("run_mcp")).executionMode, "guided");
     assert.equal((await context.client.audit("run_mcp")).result, "incomplete");
+    const review = await callTool(context.client, "flow_review", { flowId: "sdd-ahkta", profileId: "ahkta", last: 5 });
+    assert.deepEqual(review.structuredContent, { advisoryOnly: true, flowId: "sdd-ahkta", profileId: "ahkta", last: 5, compareVersions: false });
   } finally {
     await new Promise((resolve) => context.server.close(resolve));
     await rm(context.directory, { recursive: true, force: true });
@@ -39,13 +42,15 @@ test("flow-mcp uses only the local service for guided runs and audits", async ()
 });
 
 test("flow-mcp advertises a bounded tool set and fails unavailable actions closed", async () => {
-  assert.deepEqual(tools.map((tool) => tool.name), ["flow_list", "flow_select", "flow_inspect", "flow_start_guided", "flow_next", "flow_lifecycle", "flow_checkpoint", "flow_audit", "flow_open"]);
+  assert.deepEqual(tools.map((tool) => tool.name), ["flow_list", "flow_select", "flow_inspect", "flow_start_guided", "flow_next", "flow_lifecycle", "flow_checkpoint", "flow_audit", "flow_review", "flow_open"]);
   const initialized = await handleRequest({}, { method: "initialize" });
   assert.equal(initialized.serverInfo.name, "flow-mcp");
   const next = await callTool({ next: async () => ({ status: "ready", nodes: [] }) }, "flow_next", { runId: "run_test" });
   assert.equal(next.structuredContent.status, "ready");
   const lifecycle = await callTool({ lifecycle: async (runId, action) => ({ runId, action }) }, "flow_lifecycle", { runId: "run_test", action: "pause" });
   assert.deepEqual(lifecycle.structuredContent, { runId: "run_test", action: "pause" });
+  const review = await callTool({ review: async (input) => ({ advisoryOnly: true, ...input }) }, "flow_review", { flowId: "sdd-ahkta", profileId: "ahkta" });
+  assert.deepEqual(review.structuredContent, { advisoryOnly: true, flowId: "sdd-ahkta", profileId: "ahkta" });
   const unavailable = await callTool({}, "flow_open", { runId: "run_test" });
   assert.equal(unavailable.isError, true);
   assert.match(unavailable.content[0].text, /MCP_OPERATION_UNAVAILABLE/);

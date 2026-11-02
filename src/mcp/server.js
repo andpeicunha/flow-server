@@ -20,6 +20,7 @@ export const tools = Object.freeze([
   { name: "flow_lifecycle", description: "Pause, resume, stop, or fail a local guided run. Completion is set automatically when all required nodes finish.", inputSchema: { type: "object", additionalProperties: false, required: ["runId", "action"], properties: { runId, action: { enum: ["pause", "resume", "stop", "fail"] } } } },
   { name: "flow_checkpoint", description: "Write one redacted receipt to an active local run.", inputSchema: { type: "object", additionalProperties: false, required: ["runId", "receipt"], properties: { runId, receipt: { type: "object" } } } },
   { name: "flow_audit", description: "Read the deterministic audit for one local run.", inputSchema: { type: "object", additionalProperties: false, required: ["runId"], properties: { runId } } },
+  { name: "flow_review", description: "On explicit maintainer request, review completed local runs for one flow. Returns an advisory evidence report for an independent agent using the flow-performance-review Skill. Never call from an active flow node.", inputSchema: { type: "object", additionalProperties: false, required: ["flowId"], properties: { flowId: identifier, profileId: identifier, last: { type: "integer", minimum: 1, maximum: 100 }, since: { type: "string" }, contentHash: { type: "string", pattern: "^[a-f0-9]{64}$" }, compareVersions: { type: "boolean" } } } },
   { name: "flow_open", description: "Reserved for an optional read-only viewer. This version fails closed.", inputSchema: { type: "object", additionalProperties: false, required: ["runId"], properties: { runId } } }
 ]);
 
@@ -41,6 +42,7 @@ export async function callTool(client, name, input = {}) {
     if (name === "flow_start_guided") return result(await client.startGuided(input));
     if (name === "flow_checkpoint") return result(await client.checkpoint(input.runId, input.receipt));
     if (name === "flow_audit") return result(await client.audit(input.runId));
+    if (name === "flow_review") return result(await client.review(input));
     if (name === "flow_next") return result(await client.next(input.runId));
     if (name === "flow_lifecycle") return result(await client.lifecycle(input.runId, input.action));
     if (name === "flow_open") throw new FlowError("MCP_OPERATION_UNAVAILABLE", `${name} is not available until the viewer is installed.`);

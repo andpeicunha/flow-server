@@ -18,6 +18,8 @@ state directory.
 
 This project is available under the [MIT License](LICENSE).
 
+For a short, human-readable walkthrough, see the [quick guide in Portuguese](docs/guia-rapido.md).
+
 See `openspec/changes/local-flow-service-product/` for the staged architecture and migration plan.
 
 ## Development
@@ -57,7 +59,7 @@ node src/cli/flow.mjs audit <run-id>
 Direct mode requires `--approve-host-adapter`; the current development build
 still does not launch any adapter.
 
-### Use with the legacy flow command
+### Install local commands
 
 Install the local development commands on macOS from this repository:
 
@@ -65,17 +67,8 @@ Install the local development commands on macOS from this repository:
 npm link
 ```
 
-This makes `flow-server` and the new `flow` client available in your shell.
-The legacy flow runner remains unchanged unless you explicitly enable the
-feature flag below:
-
-```sh
-export FLOW_SERVER_USE_LOCAL=1
-```
-
-With the flag enabled, the compatibility shim sends supported local-service
-commands to the installed client. Without it, the shim uses the legacy runner.
-The bridge does not launch Codex or Claude adapters.
+This makes `flow-server`, `flow-source`, `flow-mcp`, and the new `flow` client
+available in your shell. Use the Herdr plugin and local MCP for new runs.
 
 ## External flows and adapters
 
@@ -101,13 +94,26 @@ and connects only to the loopback service. Setup instructions are in
 Personal flows stay in explicitly configured local directories. A source may be
 `local` or a local `git` worktree owned by the developer. `flow-server` never
 searches `$HOME`, stores Git credentials, or requires a remote service.
+Each developer chooses their own source path. A private repository can be used;
+no repository name or hosting provider is built into the plugin.
 
 ### Herdr plugin
 
-After this change is merged, install it with `herdr plugin install
-andpeicunha/flow-server -y`. For a local checkout, use `herdr plugin link
-/absolute/path/to/flow-server --enabled`. The plugin package includes the local service, CLI, schemas,
-Skills, and starter flow. It does not install or activate private flows.
+Install a published GitHub branch or tag with:
+
+```sh
+herdr plugin install andpeicunha/flow-server --ref <branch-or-tag> -y
+```
+
+For a local checkout, use:
+
+```sh
+herdr plugin link /absolute/path/to/flow-server --enabled
+```
+
+The plugin package includes the local service, CLI, schemas, Skills, and
+starter flow. It does not install or activate private flows. Each developer
+configures the directory containing their own flows after installation.
 
 Open the `Flow Server` pane. On first use, choose an existing local flow
 directory and an optional workspace directory. The plugin saves only source
@@ -135,6 +141,11 @@ sources:
       push: manual
 ```
 
+For a private Git repository, point `path` to its checked-out flow directory
+and set `mode: git`. You may also set `remote` and `branch` for that source.
+Git synchronization is separate from flow execution: the plugin reads the
+current checkout and does not pull remote changes automatically.
+
 Start the service with the explicit file:
 
 ```sh
@@ -150,15 +161,17 @@ flow-source mark --config /absolute/path/to/sources.yaml --source personal --fil
 
 The runner selects a profile automatically only when one configured workspace
 root matches uniquely. It selects a flow automatically only from an explicit
-flow ID or when exactly one flow matches routing terms. Otherwise, `flow select` or MCP
+flow ID or when exactly one flow matches routing terms. Otherwise, the CLI or MCP
 `flow_select` returns `needs_confirmation`; the agent must ask the developer
 before starting. `flow_next` then returns ready nodes with the exact configured
 agent, model, effort, executor, Skills, constraints, and prompt. The agent
 records bounded structured output in node receipts so later conditions can run.
 The first `flow_next` starts the run. It marks the run complete when all required
-nodes finish; `flow lifecycle <runId> pause|resume|stop|fail` controls an active run.
-`flow audit` reports `passed` only for a completed run with evidence for every
+nodes finish; the CLI lifecycle command controls an active run.
+The CLI audit command reports `passed` only for a completed run with evidence for every
 required node.
+
+For the full sequence in plain language, see the [quick guide](docs/guia-rapido.md).
 
 The installed `flow-source-management` Skill defines safe commit, push, pull,
 and rollback behavior. Pull always requires confirmation. The optional remote
@@ -171,12 +184,16 @@ Node receipts may record bounded duration, attempt, effective agent/model,
 effort, Skills, deterministic validation, and passive review signals. Signals
 are advisory and must set `affectsRun: false`; they never change an active run.
 
-An explicit post-run review uses only local deterministic aggregation:
+An explicit post-run review uses only local deterministic aggregation.
+
+The maintainer requests this review in a separate session. The agent calls
+`flow_review` through the local MCP and uses the `flow-performance-review`
+Skill to interpret the report. The CLI is also available:
 
 ```sh
-flow review sdd --last 20 --compare-versions
-flow review sdd --since 2026-10-01T00:00:00Z
-flow review sdd --content-hash <sha256>
+node src/cli/flow.mjs review sdd --last 20 --compare-versions
+node src/cli/flow.mjs review sdd --since 2026-10-01T00:00:00Z
+node src/cli/flow.mjs review sdd --content-hash <sha256>
 ```
 
 The report is stored under the newest matching run at

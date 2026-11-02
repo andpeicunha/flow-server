@@ -46,6 +46,16 @@ setup. Never ask flow-server to store credentials.
    HEAD is detached, conflicts exist, or unrelated changes would enter the
    commit.
 
+## Change a node model
+
+When a maintainer approves a model change, edit the configured flow file. Use
+the full model ID, not an alias, and set the intended effort or variant for
+that node. Do not silently change other nodes. Validate the edited file with
+`flow-source validate`, then use `flow-source mark` to record its hash and local
+backup. Report the old and new model, the validated hash, and which runs still
+use the old pinned definition. There is no MCP tool that edits models, and a
+model named in a flow is guidance until the executing runtime confirms it.
+
 ## Record a pending change
 
 After successful validation, run:

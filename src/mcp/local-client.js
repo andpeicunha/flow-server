@@ -54,6 +54,12 @@ export class LocalFlowClient {
   selectFlow(selection) { return this.request("/v1/flow-selection", { method: "POST", mutate: true, body: selection }); }
   inspect(runId) { return this.request(`/v1/runs/${encodeURIComponent(runId)}`); }
   audit(runId) { return this.request(`/v1/runs/${encodeURIComponent(runId)}/audit`); }
+  review({ flowId, profileId, last = 20, since, contentHash, compareVersions = false }) {
+    return this.request("/v1/reviews", { method: "POST", mutate: true, body: {
+      flowId, ...(profileId ? { profileId } : {}), last,
+      ...(since ? { since } : {}), ...(contentHash ? { contentHash } : {}), compareVersions
+    } });
+  }
   next(runId) { return this.request(`/v1/runs/${encodeURIComponent(runId)}/next`, { method: "POST", mutate: true, body: {} }); }
   lifecycle(runId, action) { return this.request(`/v1/runs/${encodeURIComponent(runId)}/lifecycle`, { method: "POST", mutate: true, body: { action } }); }
   startGuided({ flowId, profileId, workspace, runtime, task }) {

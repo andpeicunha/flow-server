@@ -8,8 +8,10 @@ description: Review stored flow runs and propose evidence-based flow improvement
 Use this Skill only when a maintainer explicitly asks to review or revalidate a
 flow. Never invoke it from an active node.
 
-1. Run `flow review <flowId> --last 20 --compare-versions`. Add `--since` or
-   `--content-hash` when the maintainer requests a narrower sample.
+1. Call the local MCP `flow_review` with the selected `flowId`, `profileId`,
+   `last: 20`, and `compareVersions: true`. Use `since` or `contentHash` when
+   the maintainer requests a narrower sample. The CLI `flow review` is a
+   fallback when the MCP is unavailable.
 2. Confirm the report's `flowId`, content-hash groups, run IDs, sample sizes,
    and `advisoryOnly: true` marker.
 3. Evaluate success rate, failures, retries, duration, validation failures,
