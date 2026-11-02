@@ -20,6 +20,8 @@ flow. Never invoke it from an active node.
 4. Treat a single anomaly as weak evidence. State sample size and confidence.
 5. Read referenced receipts only when a finding needs more context. Do not copy
    secrets, full prompts, or private output into the report.
+   Optional `tokenUsage` counts can help compare costs, but absent counts are
+   unknown and the service cannot verify which runtime supplied them.
 6. Classify recommendations as flow YAML, node prompt, guardrail, Skill,
    agent/model routing, plugin/tooling, or runtime integration.
 7. Produce a proposed diff and validation plan. Do not edit or activate the flow

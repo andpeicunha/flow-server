@@ -104,6 +104,24 @@ test("active checkpoint accepts passive signals but rejects signals that affect 
   }
 });
 
+test("receipt token counts are optional and bounded by the v1 contract", async () => {
+  const service = new RunService();
+  const receipt = { schemaVersion: "v1", runId: "run_usage", nodeId: "verify", status: "completed", recordedAt: "2026-01-01T00:00:00.000Z" };
+  const schema = JSON.parse(await readFile(new URL("../contracts/v1/receipt.schema.json", import.meta.url), "utf8"));
+  const ajv = new Ajv2020({ strict: true, allowUnionTypes: true });
+  addFormats(ajv);
+  const validate = ajv.compile(schema);
+  service.validateReceiptEvidence(receipt);
+  assert.equal(validate(receipt), true);
+  const withUsage = { ...receipt, tokenUsage: { inputTokens: 1200, outputTokens: 300 } };
+  service.validateReceiptEvidence(withUsage);
+  assert.equal(validate(withUsage), true);
+  for (const tokenUsage of [{ inputTokens: -1, outputTokens: 1 }, { inputTokens: 1 }, { inputTokens: 1, outputTokens: 2, prompt: "secret" }]) {
+    assert.throws(() => service.validateReceiptEvidence({ ...receipt, tokenUsage }), { code: "INVALID_RECEIPT" });
+    assert.equal(validate({ ...receipt, tokenUsage }), false);
+  }
+});
+
 test("flow review reports partial and unexpected node evidence", async () => {
   const directory = await mkdtemp(join(tmpdir(), "flow-review-test-"));
   try {

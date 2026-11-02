@@ -29,7 +29,9 @@ export class RunService {
   }
 
   async create({ flowId, profileId, workspace, runtime, executionMode, task, flowSourceId, flowContentHash, flowGitCommit }) {
-    const resolved = this.flowResolver ? await this.flowResolver({ flowId, profileId, workspace }) : {};
+    const resolved = this.flowResolver ? await this.flowResolver({ flowId, profileId, workspace, runtime }) : {};
+    const selectedRuntime = resolved.runtime ?? runtime;
+    if (!["codex", "claude"].includes(selectedRuntime)) throw new FlowError("INVALID_RUN_REQUEST", "A configured or requested runtime is required.");
     const run = {
       schemaVersion: "v1",
       id: this.createId(),
@@ -41,7 +43,7 @@ export class RunService {
       ...(resolved.flowDefinition ? { flowDefinition: resolved.flowDefinition } : {}),
       ...(task !== undefined ? { task } : {}),
       workspace,
-      runtime,
+      runtime: selectedRuntime,
       executionMode,
       status: "created",
       createdAt: this.now()
@@ -97,7 +99,7 @@ export class RunService {
   }
 
   validateReceiptEvidence(receipt) {
-    const allowed = new Set(["schemaVersion", "runId", "nodeId", "status", "recordedAt", "summary", "output", "redactions", "attempt", "durationMs", "agent", "model", "effort", "skills", "validation", "signals"]);
+    const allowed = new Set(["schemaVersion", "runId", "nodeId", "status", "recordedAt", "summary", "output", "redactions", "attempt", "durationMs", "agent", "model", "effort", "tokenUsage", "skills", "validation", "signals"]);
     const validBase = receipt && typeof receipt === "object" && !Array.isArray(receipt)
       && Object.keys(receipt).every((key) => allowed.has(key))
       && receipt.schemaVersion === "v1"
@@ -118,6 +120,14 @@ export class RunService {
     if (receipt.agent !== undefined && (typeof receipt.agent !== "string" || receipt.agent.length > 128)) throw new FlowError("INVALID_RECEIPT", "Receipt agent is invalid.");
     if (receipt.model !== undefined && (typeof receipt.model !== "string" || receipt.model.length > 256)) throw new FlowError("INVALID_RECEIPT", "Receipt model is invalid.");
     if (receipt.effort !== undefined && !["low", "medium", "high", "xhigh", "max", "ultra"].includes(receipt.effort)) throw new FlowError("INVALID_RECEIPT", "Receipt effort is invalid.");
+    if (receipt.tokenUsage !== undefined) {
+      const usage = receipt.tokenUsage;
+      const valid = usage && typeof usage === "object" && !Array.isArray(usage)
+        && Object.keys(usage).length === 2
+        && Object.keys(usage).every((key) => ["inputTokens", "outputTokens"].includes(key))
+        && [usage.inputTokens, usage.outputTokens].every((value) => Number.isInteger(value) && value >= 0 && value <= 1_000_000_000);
+      if (!valid) throw new FlowError("INVALID_RECEIPT", "Receipt tokenUsage is invalid.");
+    }
     if (receipt.skills !== undefined && (!Array.isArray(receipt.skills) || receipt.skills.length > 32 || receipt.skills.some((skill) => typeof skill !== "string" || skill.length > 128))) throw new FlowError("INVALID_RECEIPT", "Receipt skills are invalid.");
     if (receipt.validation !== undefined) {
       const valid = receipt.validation && typeof receipt.validation === "object" && !Array.isArray(receipt.validation)

@@ -19,6 +19,15 @@
     "agent": { "type": "string", "maxLength": 128 },
     "model": { "type": "string", "maxLength": 256 },
     "effort": { "enum": ["low", "medium", "high", "xhigh", "max", "ultra"] },
+    "tokenUsage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["inputTokens", "outputTokens"],
+      "properties": {
+        "inputTokens": { "type": "integer", "minimum": 0, "maximum": 1000000000 },
+        "outputTokens": { "type": "integer", "minimum": 0, "maximum": 1000000000 }
+      }
+    },
     "skills": {
       "type": "array",
       "maxItems": 32,

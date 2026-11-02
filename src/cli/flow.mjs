@@ -123,7 +123,7 @@ async function main() {
     return console.log(JSON.stringify(await request(client, "/v1/flow-selection", { method: "POST", body, mutate: true })));
   }
   if (command === "start") {
-    const runtime = requireOption(values, "--runtime");
+    const runtime = values["--runtime"];
     const mode = requireOption(values, "--mode");
     if (mode === "direct" && !values["--approve-host-adapter"]) {
       throw new Error("Direct mode requires --approve-host-adapter. No adapter is launched by this development build.");
@@ -140,7 +140,7 @@ async function main() {
       process.exitCode = 2;
       return;
     }
-    const body = { flowId: selection.flowId, profileId: selection.profileId, workspace, runtime, executionMode: mode, ...(values["--task"] ? { task: values["--task"] } : {}) };
+    const body = { flowId: selection.flowId, profileId: selection.profileId, workspace, ...(runtime ? { runtime } : {}), executionMode: mode, ...(values["--task"] ? { task: values["--task"] } : {}) };
     return console.log(JSON.stringify(await request(client, "/v1/runs", { method: "POST", body, mutate: true })));
   }
   const receiptPath = requireOption(values, "--receipt");

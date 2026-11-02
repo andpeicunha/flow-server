@@ -121,22 +121,44 @@ export class FlowSourceService {
   }
 
   selection(entry, profileId, reason) {
-    return { decision: "ready", reason, profileId, flowId: entry.flow.id, flowSourceId: entry.sourceId, flowContentHash: entry.contentHash };
+    const source = this.sources.find((item) => item.id === entry.sourceId);
+    return { decision: "ready", reason, profileId, flowId: entry.flow.id, flowSourceId: entry.sourceId, flowContentHash: entry.contentHash,
+      ...(source?.execution?.runtime ? { runtime: source.execution.runtime } : {}) };
   }
 
   async resolve(flowIdOrSelection, options = {}) {
     const selection = typeof flowIdOrSelection === "object" && flowIdOrSelection !== null
       ? flowIdOrSelection
       : { ...options, flowId: flowIdOrSelection };
-    const { flowId, profileId, workspace } = selection;
+    const { flowId, profileId, workspace, runtime } = selection;
     const selected = await this.selectFlow({ flowId, profileId, workspace });
     if (selected.decision !== "ready") throw new FlowError("FLOW_SELECTION_REQUIRED", "Workspace profile is unknown. Confirm the correct local profile before starting a run.");
     const entry = (await this.catalog.listEntries()).find((item) => item.flow.id === selected.flowId && item.sourceId === selected.profileId);
     const source = this.sources.find((item) => item.id === entry.sourceId);
+    const execution = source?.execution;
+    if (runtime && execution?.runtime && runtime !== execution.runtime) throw new FlowError("RUNTIME_PROFILE_MISMATCH", "The requested runtime differs from this machine's configured runtime.");
+    const selectedRuntime = execution?.runtime ?? runtime;
+    const flowDefinition = structuredClone(entry.flow);
+    if (execution) {
+      for (const node of flowDefinition.nodes) {
+        if (node.model && execution.models) {
+          if (!Object.hasOwn(execution.models, node.model)) throw new FlowError("NODE_MODEL_UNMAPPED", `Node ${node.id} has no model mapping for this machine.`);
+          node.model = execution.models[node.model];
+        }
+        if (execution.runtime === "claude" && node.model?.startsWith("openai/")) throw new FlowError("NODE_MODEL_UNMAPPED", `Node ${node.id} still names an OpenAI model for Claude.`);
+        const effort = node.effort ?? node.variant;
+        if (effort && execution.efforts && Object.hasOwn(execution.efforts, effort)) {
+          if (node.effort !== undefined) node.effort = execution.efforts[effort];
+          else node.variant = execution.efforts[effort];
+        }
+        node.executor = selectedRuntime;
+      }
+    }
     const gitIdentity = source?.mode === "git" ? await this.gitIdentity(source.path) : undefined;
     if (source?.branch && gitIdentity?.branch !== source.branch) throw new FlowError("FLOW_SOURCE_BRANCH_MISMATCH", `Flow source ${source.id} is not on its configured branch.`);
     if (source && gitIdentity) Object.assign(source, { gitCommit: gitIdentity.commit, currentBranch: gitIdentity.branch });
-    return { flowId: entry.flow.id, profileId: selected.profileId, flowSourceId: entry.sourceId, flowContentHash: entry.contentHash, flowDefinition: structuredClone(entry.flow), ...(gitIdentity?.commit ? { flowGitCommit: gitIdentity.commit } : {}) };
+    return { flowId: entry.flow.id, profileId: selected.profileId, flowSourceId: entry.sourceId, flowContentHash: entry.contentHash,
+      ...(selectedRuntime ? { runtime: selectedRuntime } : {}), flowDefinition, ...(gitIdentity?.commit ? { flowGitCommit: gitIdentity.commit } : {}) };
   }
 
   async refreshGitIdentities() {
@@ -150,6 +172,6 @@ export class FlowSourceService {
 
   async status() {
     await this.refreshGitIdentities();
-    return this.sources.map(({ id, mode, path, remote, branch, currentBranch, gitCommit, sync, workspaceRoots }) => ({ id, mode, path, ...(workspaceRoots.length ? { workspaceRoots } : {}), ...(remote ? { remote } : {}), ...(branch ? { branch } : {}), ...(currentBranch ? { currentBranch } : {}), ...(gitCommit ? { gitCommit } : {}), sync }));
+    return this.sources.map(({ id, mode, path, remote, branch, currentBranch, gitCommit, sync, workspaceRoots, execution }) => ({ id, mode, path, ...(workspaceRoots.length ? { workspaceRoots } : {}), ...(remote ? { remote } : {}), ...(branch ? { branch } : {}), ...(currentBranch ? { currentBranch } : {}), ...(gitCommit ? { gitCommit } : {}), ...(execution ? { execution: { runtime: execution.runtime, modelOverrides: Object.keys(execution.models ?? {}).length } } : {}), sync }));
   }
 }

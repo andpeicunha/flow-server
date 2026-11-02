@@ -10,9 +10,9 @@ export const tools = Object.freeze([
   { name: "flow_inspect", description: "Inspect one redacted local run.", inputSchema: { type: "object", additionalProperties: false, required: ["runId"], properties: { runId } } },
   {
     name: "flow_start_guided",
-    description: "Create a guided run for an explicitly selected or uniquely workspace-mapped flow. Call flow_select first when profile or flow is uncertain. It never starts a host adapter.",
+    description: "Create a guided run for an explicitly selected or uniquely workspace-mapped flow. Call flow_select first when profile or flow is uncertain. Runtime defaults to the selected machine profile when configured. It never starts a host adapter.",
     inputSchema: {
-      type: "object", additionalProperties: false, required: ["flowId", "workspace", "runtime"],
+      type: "object", additionalProperties: false, required: ["flowId", "workspace"],
       properties: { flowId: identifier, profileId: identifier, workspace: { type: "string", minLength: 1, maxLength: 4096 }, runtime: { enum: ["codex", "claude"] }, task: { type: "string", maxLength: 65536 } }
     }
   },

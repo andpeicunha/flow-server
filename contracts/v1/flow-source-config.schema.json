@@ -21,6 +21,14 @@
           "remote": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$" },
           "branch": { "type": "string", "minLength": 1, "maxLength": 255 },
           "workspaceRoots": { "type": "array", "maxItems": 64, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 4096 } },
+          "execution": {
+            "type": "object", "additionalProperties": false, "required": ["runtime"],
+            "properties": {
+              "runtime": { "enum": ["codex", "claude"] },
+              "models": { "type": "object", "maxProperties": 64, "propertyNames": { "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$" }, "additionalProperties": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$" } },
+              "efforts": { "type": "object", "propertyNames": { "enum": ["low", "medium", "high", "xhigh", "max", "ultra"] }, "additionalProperties": { "enum": ["low", "medium", "high", "xhigh", "max", "ultra"] } }
+            }
+          },
           "sync": {
             "type": "object",
             "additionalProperties": false,

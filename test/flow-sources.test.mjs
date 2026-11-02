@@ -25,6 +25,41 @@ test("source configuration supports local and git modes without credentials", ()
   assert.deepEqual(config.sources[1].workspaceRoots, ["/work/projects"]);
   assert.throws(() => validateFlowSourceConfig({ schemaVersion: "v1", sources: [{ id: "bad", mode: "local", path: "relative", sync: { pull: "auto", push: "manual" } }] }), { code: "INVALID_FLOW_SOURCE_CONFIG" });
   assert.throws(() => validateFlowSourceConfig({ schemaVersion: "v1", sources: [{ id: "bad", mode: "git", path: "/flows", sync: { pull: "confirm", push: "force" }, token: "secret" }] }), { code: "INVALID_FLOW_SOURCE_CONFIG" });
+  const execution = { schemaVersion: "v1", sources: [{ id: "personal", mode: "local", path: "/flows", sync: { pull: "confirm", push: "manual" }, execution: { runtime: "claude", models: { "openai/gpt-test": "anthropic/claude-test" }, efforts: { medium: "high" } } }] };
+  assert.equal(validateFlowSourceConfig(execution).sources[0].execution.runtime, "claude");
+  assert.throws(() => validateFlowSourceConfig({ ...execution, sources: [{ ...execution.sources[0], execution: { runtime: "claude", models: { "openai/gpt-test": "anthropic/claude-test" }, unsupported: true } }] }), { code: "INVALID_FLOW_SOURCE_CONFIG" });
+});
+
+test("machine execution maps node models once and pins them to the run", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "flow-execution-source-"));
+  try {
+    const flows = join(directory, "flows");
+    const workspace = join(directory, "project");
+    await mkdir(flows);
+    await mkdir(workspace);
+    await writeFile(join(flows, "sample.yaml"), "schemaVersion: v1\nid: sample\nnodes:\n  - id: work\n    model: openai/gpt-test\n    variant: medium\n    executor: opencode\n");
+    const configPath = join(directory, "sources.json");
+    const source = { id: "personal", mode: "local", path: flows, workspaceRoots: [workspace], sync: { pull: "confirm", push: "manual" }, execution: { runtime: "claude", models: { "openai/gpt-test": "anthropic/claude-test" }, efforts: { medium: "high" } } };
+    await writeFile(configPath, JSON.stringify({ schemaVersion: "v1", sources: [source] }));
+    const service = new FlowSourceService({ configPath });
+    await service.initialize();
+    const selected = await service.selectFlow({ workspace, flowId: "sample" });
+    assert.equal(selected.runtime, "claude");
+    const written = [];
+    const runService = new RunService({ stateStore: { writeRun: async (run) => written.push(run) }, flowResolver: (selection) => service.resolve(selection), createId: () => "run_mapped", now: () => "2026-01-01T00:00:00.000Z" });
+    const run = await runService.create({ flowId: "sample", workspace, executionMode: "guided" });
+    assert.equal(run.runtime, "claude");
+    assert.deepEqual([written[0].flowDefinition.nodes[0].model, written[0].flowDefinition.nodes[0].variant, written[0].flowDefinition.nodes[0].executor], ["anthropic/claude-test", "high", "claude"]);
+    assert.equal((await service.catalog.listEntries())[0].flow.nodes[0].model, "openai/gpt-test");
+    await assert.rejects(runService.create({ flowId: "sample", workspace, runtime: "codex", executionMode: "guided" }), { code: "RUNTIME_PROFILE_MISMATCH" });
+    source.execution.models = {};
+    await writeFile(configPath, JSON.stringify({ schemaVersion: "v1", sources: [source] }));
+    const missing = new FlowSourceService({ configPath });
+    await missing.initialize();
+    await assert.rejects(missing.resolve({ flowId: "sample", profileId: "personal" }), { code: "NODE_MODEL_UNMAPPED" });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("source configuration loads only an explicit absolute JSON file", async () => {

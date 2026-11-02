@@ -11,10 +11,41 @@ agentes sozinho.
    escolha a pasta que contém seus flows e, se quiser, a pasta do projeto.
    Essa pasta pode estar em qualquer repositório privado seu; o plugin não
    escolhe um repositório por você. No modo Git, ele lê o clone desta máquina.
+   A instalação reconhece a versão antiga, valida e copia seus YAMLs antes de
+   retirar o comando e o plugin antigos. Se houver conflito ou arquivo
+   desconhecido, ela para antes da limpeza. Logs antigos são movidos, sem
+   alteração, para `~/.local/share/flow-server/legacy-runs`.
 2. Instale os comandos com `npm link` na pasta deste repositório e configure o
    MCP `flow-server` no Codex. Veja os comandos em [Configurar o MCP](codex-mcp.md).
 3. Confira o serviço com `flow-server status`. Se estiver parado, abra o painel
    ou inicie `flow-server start --source-config ~/.config/flow-server/sources.json --port 4741`.
+4. Use **7 Doctor** no painel ou `flow-server doctor` para conferir serviço,
+   fonte, MCP do Codex ou Claude e Skills do runtime escolhido. O diagnóstico não inicia runs nem testa modelos;
+   ele mostra o acesso aos modelos como `not_tested`. Para checar só um flow,
+   use `flow-server doctor --profile ahkta --flow sdd-ahkta`.
+
+### Escolher o runtime nesta máquina
+
+Na configuração local da fonte (`~/.config/flow-server/sources.json`), adicione
+`execution` à fonte. O YAML compartilhado do flow continua igual:
+
+```json
+"execution": {
+  "runtime": "claude",
+  "models": {
+    "openai/gpt-5.5-fast": "anthropic/modelo-rapido",
+    "openai/gpt-5.5": "anthropic/modelo-principal"
+  },
+  "efforts": { "medium": "high" }
+}
+```
+
+Substitua os nomes de exemplo pelos modelos que o cliente da máquina aceita.
+Se usar Codex e os modelos do YAML, basta `"execution": { "runtime": "codex" }`.
+Ao iniciar um run, o serviço fixa os modelos resolvidos para seus nós. Se
+faltar um modelo no mapa, ele não inicia o run. Uma troca de runtime exige
+editar essa configuração local; não há troca automática durante o run. Para
+OpenRouter, configure o cliente escolhido e use no mapa os IDs aceitos por ele.
 
 ## Rodar um flow
 
@@ -23,7 +54,8 @@ agentes sozinho.
 2. O agente usa `flow_list` e `flow_select` para encontrar o flow. Se houver
    uma única opção, ele segue. Se houver mais de uma, você escolhe antes de
    começar.
-3. `flow_start_guided` cria o run. Guarde seu ID (campo `id`); ele será o
+3. `flow_start_guided` cria o run com o runtime configurado na máquina. Guarde
+   seu ID (campo `id`); ele será o
    `runId` usado nas próximas chamadas.
 4. O agente chama `flow_next`, executa os nós prontos conforme as instruções
    recebidas e salva o resultado real com `flow_checkpoint`. Depois chama
@@ -37,6 +69,17 @@ o caminho correto. Não registre um resultado que não aconteceu.
 O plugin exige que o checkpoint de um nó concluído informe o modelo e o effort
 configurados. Ele não inicia o agente nem comprova sozinho qual modelo foi
 executado; o agente deve conferir esses dados no runtime antes de registrá-los.
+Se o runtime mostrar o uso de tokens do nó, o agente pode registrar
+`tokenUsage: { "inputTokens": 1200, "outputTokens": 300 }`. Se não mostrar,
+deixe `tokenUsage` ausente: o dado é desconhecido. O mesmo vale para
+`durationMs`. Não estime esses números. O agente de validação pode consultar
+os receipts em `flow_inspect`, mas deve tratar os números informados pelo
+agente como dados sem comprovação independente pelo serviço.
+
+Para novos worktrees, prefira `<repo>/.worktree/<nome>` e inclua `.worktree/`
+no `.gitignore` do projeto. Cadastre a raiz do repositório como workspace e
+informe o perfil explicitamente se a seleção automática não reconhecer o
+worktree. Isso é uma convenção sugerida; o plugin aceita outros caminhos.
 
 ## Conferir o resultado
 

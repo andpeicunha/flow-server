@@ -6,6 +6,8 @@ import { FlowError } from "./errors.js";
 const identifier = /^[a-z][a-z0-9-]{0,62}$/;
 const remoteName = /^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/;
 const pushPolicies = new Set(["manual", "confirm", "after-validation"]);
+const efforts = new Set(["low", "medium", "high", "xhigh", "max", "ultra"]);
+const modelId = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/;
 
 function exactKeys(value, allowed) {
   return Object.keys(value).every((key) => allowed.has(key));
@@ -19,7 +21,16 @@ export function validateFlowSourceConfig(value) {
 
   const ids = new Set();
   const sources = value.sources.map((source) => {
-    const allowed = new Set(["id", "mode", "path", "remote", "branch", "workspaceRoots", "sync"]);
+    const allowed = new Set(["id", "mode", "path", "remote", "branch", "workspaceRoots", "sync", "execution"]);
+    const execution = source?.execution;
+    const validExecution = execution === undefined || (execution && typeof execution === "object" && !Array.isArray(execution)
+      && exactKeys(execution, new Set(["runtime", "models", "efforts"]))
+      && ["codex", "claude"].includes(execution.runtime)
+      && (execution.models === undefined || (execution.models && typeof execution.models === "object" && !Array.isArray(execution.models)
+        && Object.keys(execution.models).length <= 64
+        && Object.entries(execution.models).every(([from, to]) => modelId.test(from) && typeof to === "string" && modelId.test(to))))
+      && (execution.efforts === undefined || (execution.efforts && typeof execution.efforts === "object" && !Array.isArray(execution.efforts)
+        && Object.entries(execution.efforts).every(([from, to]) => efforts.has(from) && efforts.has(to)))));
     const validSync = source?.sync && typeof source.sync === "object" && !Array.isArray(source.sync)
       && exactKeys(source.sync, new Set(["pull", "push"]))
       && source.sync.pull === "confirm" && pushPolicies.has(source.sync.push);
@@ -27,7 +38,7 @@ export function validateFlowSourceConfig(value) {
       && exactKeys(source, allowed) && identifier.test(source.id) && ["local", "git"].includes(source.mode)
       && typeof source.path === "string" && source.path.length <= 4096 && isAbsolute(source.path)
       && (source.workspaceRoots === undefined || (Array.isArray(source.workspaceRoots) && source.workspaceRoots.length <= 64 && source.workspaceRoots.every((root) => typeof root === "string" && root.length > 0 && root.length <= 4096 && isAbsolute(root))))
-      && validSync;
+      && validSync && validExecution;
     if (!valid || ids.has(source?.id)) throw new FlowError("INVALID_FLOW_SOURCE_CONFIG", "Each flow source must have a unique ID, an absolute path, a mode, and safe sync policies.");
     if (source.mode === "local" && (source.remote !== undefined || source.branch !== undefined)) {
       throw new FlowError("INVALID_FLOW_SOURCE_CONFIG", "Local flow sources cannot configure a Git remote or branch.");

@@ -35,9 +35,9 @@ function validateCreate(body) {
     && typeof body.flowId === "string" && /^[a-z][a-z0-9-]{0,62}$/.test(body.flowId)
     && (body.profileId === undefined || (typeof body.profileId === "string" && /^[a-z][a-z0-9-]{0,62}$/.test(body.profileId)))
     && typeof body.workspace === "string" && body.workspace.length > 0 && body.workspace.length <= 4096
-    && ["codex", "claude"].includes(body.runtime) && ["guided", "direct"].includes(body.executionMode)
+    && (body.runtime === undefined || ["codex", "claude"].includes(body.runtime)) && ["guided", "direct"].includes(body.executionMode)
     && (body.task === undefined || (typeof body.task === "string" && body.task.length <= 64 * 1024));
-  if (!valid) throw new FlowError("INVALID_RUN_REQUEST", "flowId, workspace, runtime, and executionMode are required.");
+  if (!valid) throw new FlowError("INVALID_RUN_REQUEST", "flowId, workspace, and executionMode are required; runtime must be configured or supplied.");
 }
 
 function validateFlowSelection(body) {

@@ -4,15 +4,16 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { resolveStateDir } from "../core/state-dir.js";
+import { diagnoseFlowSetup } from "../service/doctor-service.js";
 import { ServiceHost } from "../service/service-host.js";
 
 const commands = new Set(["start", "status", "stop", "doctor", "serve"]);
 
 function usage() {
-  return "Usage: flow-server <start|status|stop|doctor> [--state-dir DIR] [--source-config FILE] [--port PORT]";
+  return "Usage: flow-server <start|status|stop|doctor> [--state-dir DIR] [--source-config FILE] [--port PORT] [--profile ID] [--flow ID]";
 }
 
-function options(argumentsList) {
+function options(command, argumentsList) {
   const values = {};
   for (let index = 0; index < argumentsList.length; index += 1) {
     const key = argumentsList[index];
@@ -21,11 +22,13 @@ function options(argumentsList) {
     if (!values[key] || values[key].startsWith("--")) throw new Error(`Missing value for ${key}`);
     index += 1;
   }
-  const unexpected = Object.keys(values).find((key) => !["--state-dir", "--source-config", "--port"].includes(key));
+  const unexpected = Object.keys(values).find((key) => !["--state-dir", "--source-config", "--port", "--profile", "--flow"].includes(key));
   if (unexpected) throw new Error(`Unsupported option: ${unexpected}`);
   const port = values["--port"] === undefined ? 4729 : Number(values["--port"]);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("--port must be an integer from 1 to 65535.");
-  return { stateDir: values["--state-dir"] || resolveStateDir({ homeDir: homedir() }), sourceConfig: values["--source-config"], port };
+  if ((values["--profile"] || values["--flow"]) && command !== "doctor") throw new Error("--profile and --flow are supported only by doctor.");
+  return { stateDir: values["--state-dir"] || resolveStateDir({ homeDir: homedir() }), sourceConfig: values["--source-config"], port,
+    profileId: values["--profile"], flowId: values["--flow"] };
 }
 
 async function metadata(stateDir) {
@@ -88,15 +91,17 @@ async function stop(configuration) {
 }
 
 async function doctor(configuration) {
-  let service = "stopped";
-  try { service = (await status(configuration)).status; } catch { /* Report state below. */ }
-  console.log(JSON.stringify({ node: process.version, stateDir: configuration.stateDir, expectedBind: "127.0.0.1", service }));
+  const result = await diagnoseFlowSetup({ stateDir: configuration.stateDir,
+    sourceConfig: configuration.sourceConfig || process.env.FLOW_SOURCE_CONFIG || `${homedir()}/.config/flow-server/sources.json`,
+    profileId: configuration.profileId, flowId: configuration.flowId });
+  console.log(JSON.stringify(result));
+  if (result.status === "not_ready") process.exitCode = 1;
 }
 
 async function main() {
   const [command, ...argumentsList] = process.argv.slice(2);
   if (!commands.has(command)) throw new Error(usage());
-  const configuration = options(argumentsList);
+  const configuration = options(command, argumentsList);
   if (command === "serve") return serve(configuration);
   if (command === "start") return start(configuration);
   if (command === "status") return status(configuration);

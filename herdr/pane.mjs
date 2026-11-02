@@ -61,7 +61,7 @@ async function main() {
   const client = new LocalFlowClient({ stateDir });
   console.log("Flow Server is ready. The local MCP uses this same service.");
   while (true) {
-    console.log("\n1 List flows  2 Start guided run  3 Inspect run  4 Audit run  5 Validate sources  6 Guide  q Quit");
+    console.log("\n1 List flows  2 Start guided run  3 Inspect run  4 Audit run  5 Validate sources  6 Guide  7 Doctor  q Quit");
     const command = await ask("Choose");
     if (command === "q") return;
     try {
@@ -77,7 +77,7 @@ async function main() {
           console.log(JSON.stringify(selection, null, 2));
           continue;
         }
-        const runtime = await ask("Agent runtime (codex/claude)", "codex");
+        const runtime = await ask("Agent runtime (codex/claude)", selection.runtime || "codex");
         if (!["codex", "claude"].includes(runtime)) throw new Error("Runtime must be codex or claude.");
         const run = await client.startGuided({ flowId: selection.flowId, profileId: selection.profileId, workspace, runtime, task });
         console.log(JSON.stringify(run, null, 2));
@@ -89,6 +89,13 @@ async function main() {
         console.log(`${flows.length} flow(s) valid across ${sourceService.sources.length} source(s).`);
       } else if (command === "6") {
         console.log(await readFile(join(packageRoot, "docs", "guia-rapido.md"), "utf8"));
+      } else if (command === "7") {
+        const flowId = await ask("Flow ID (blank for all)");
+        const args = [join(packageRoot, "src/cli/flow-server.mjs"), "doctor", "--state-dir", stateDir, "--source-config", configPath];
+        if (flowId) args.push("--flow", flowId);
+        const result = spawnSync(process.execPath, args, { encoding: "utf8" });
+        console.log(result.stdout.trim());
+        if (result.stderr.trim()) console.error(result.stderr.trim());
       } else if (command === "3" || command === "4") {
         const runId = await ask("Run ID");
         console.log(JSON.stringify(command === "3" ? await client.inspect(runId) : await client.audit(runId), null, 2));

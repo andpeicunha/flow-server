@@ -33,6 +33,10 @@ run when the workspace or flow is not already known. A unique local workspace
 mapping and route can be trusted automatically; if selection is ambiguous, ask
 the developer and do not start a run yet.
 
+For Claude, register the same `flow-mcp` command with `claude mcp add flow-server -- flow-mcp`.
+The local source can set `execution.runtime: "claude"`; the doctor then checks
+Claude's MCP registration and Skills instead of Codex's.
+
 Use `flow_list` to inspect flows in a profile, `flow_start_guided` to create a
 selected run. Pass the original task so it appears in node prompts. `flow_next`
 starts the run and returns ready nodes with their configured agent,

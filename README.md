@@ -83,6 +83,18 @@ in this development build. Direct mode and adapter launch fail closed. No
 adapter can run until a later approved change adds local authorization and a
 host launcher.
 
+Each local source may set `execution.runtime` to `codex` or `claude`, plus a
+small `execution.models` map from flow model IDs to models available on that
+machine. `execution.efforts` can translate a few effort values. The resolved
+node settings are pinned in each run; the shared YAML stays unchanged. A
+requested runtime that conflicts with the machine setting is rejected. See
+[the quick guide](docs/guia-rapido.md) for a short example.
+
+The Herdr plugin build checks for the known legacy runner. It validates and
+copies flow YAML files before removing old entrypoints. Conflicts or unknown
+files stop cleanup. Historical run logs are moved intact to
+`~/.local/share/flow-server/legacy-runs` and are never read by the new service.
+
 ## Local MCP
 
 `flow-mcp` lets Codex call the local flow service from a prompt. It uses stdio
@@ -180,8 +192,9 @@ required for local sources.
 
 ## Low-cost run evidence and flow review
 
-Node receipts may record bounded duration, attempt, effective agent/model,
-effort, Skills, deterministic validation, and passive review signals. Signals
+Node receipts may record bounded duration, attempt, declared agent/model,
+effort, optional runtime token counts (`tokenUsage.inputTokens` and
+`tokenUsage.outputTokens`), Skills, deterministic validation, and passive review signals. Missing token counts are unknown; the service cannot verify the runtime source. Signals
 are advisory and must set `affectsRun: false`; they never change an active run.
 
 An explicit post-run review uses only local deterministic aggregation.

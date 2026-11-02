@@ -63,7 +63,7 @@ export class LocalFlowClient {
   next(runId) { return this.request(`/v1/runs/${encodeURIComponent(runId)}/next`, { method: "POST", mutate: true, body: {} }); }
   lifecycle(runId, action) { return this.request(`/v1/runs/${encodeURIComponent(runId)}/lifecycle`, { method: "POST", mutate: true, body: { action } }); }
   startGuided({ flowId, profileId, workspace, runtime, task }) {
-    return this.request("/v1/runs", { method: "POST", mutate: true, body: { flowId, ...(profileId ? { profileId } : {}), workspace, runtime, executionMode: "guided", ...(task !== undefined ? { task } : {}) } });
+    return this.request("/v1/runs", { method: "POST", mutate: true, body: { flowId, ...(profileId ? { profileId } : {}), workspace, ...(runtime ? { runtime } : {}), executionMode: "guided", ...(task !== undefined ? { task } : {}) } });
   }
   checkpoint(runId, receipt) {
     return this.request(`/v1/runs/${encodeURIComponent(runId)}/checkpoint`, { method: "POST", mutate: true, body: { receipt } });
