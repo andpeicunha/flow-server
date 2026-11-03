@@ -1,5 +1,6 @@
 import { readFile, realpath } from "node:fs/promises";
-import { extname, isAbsolute } from "node:path";
+import { homedir } from "node:os";
+import { extname, isAbsolute, join } from "node:path";
 import { isAlias, parseDocument, visit } from "yaml";
 import { FlowError } from "./errors.js";
 
@@ -8,6 +9,10 @@ const remoteName = /^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/;
 const pushPolicies = new Set(["manual", "confirm", "after-validation"]);
 const efforts = new Set(["low", "medium", "high", "xhigh", "max", "ultra"]);
 const modelId = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/;
+
+export function resolveFlowSourceConfigPath({ explicit, env = process.env, homeDir = homedir() } = {}) {
+  return explicit || env.FLOW_SOURCE_CONFIG || join(homeDir, ".config", "flow-server", "sources.json");
+}
 
 function exactKeys(value, allowed) {
   return Object.keys(value).every((key) => allowed.has(key));

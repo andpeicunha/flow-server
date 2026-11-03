@@ -60,3 +60,9 @@ test("a healthy service with another source is not reused", async () => {
     fetchImpl: async () => ({ ok: true, json: async () => ({ status: "ready", sourceConfig: "/other.json" }) })
   }), /different source configuration/);
 });
+
+test("a healthy service without sources is not reused for a configured plugin", async () => {
+  await assert.rejects(checkBeforeStart({ ...base,
+    fetchImpl: async () => ({ ok: true, json: async () => ({ status: "ready" }) })
+  }), /different source configuration/);
+});

@@ -229,8 +229,15 @@ test("CLI starts, inspects, and stops a local service without adapters", async (
   const port = 47992;
   const argumentsList = [cli];
   try {
-    const started = await execFile(process.execPath, [...argumentsList, "start", "--state-dir", directory, "--port", String(port)]);
+    const flows = join(directory, "flows");
+    const sourceConfig = join(directory, "sources.json");
+    await mkdir(flows);
+    await writeFile(join(flows, "hello.yaml"), "schemaVersion: v1\nid: hello-flow\ntitle: Hello\nnodes: [{ id: work, title: Work }]\n");
+    await writeFile(sourceConfig, JSON.stringify({ schemaVersion: "v1", sources: [{ id: "personal", mode: "local", path: flows, workspaceRoots: [], sync: { pull: "confirm", push: "manual" } }] }));
+    const started = await execFile(process.execPath, [...argumentsList, "start", "--state-dir", directory, "--port", String(port)], { env: { ...process.env, FLOW_SOURCE_CONFIG: sourceConfig } });
     assert.equal(JSON.parse(started.stdout).status, "ready");
+    assert.equal(JSON.parse(started.stdout).sourceConfig, sourceConfig);
+    assert.equal((await (await fetch(`http://127.0.0.1:${port}/v1/flows`)).json()).items[0].profileId, "personal");
     const status = await execFile(process.execPath, [...argumentsList, "status", "--state-dir", directory]);
     assert.equal(JSON.parse(status.stdout).bind, "127.0.0.1");
     const stopped = await execFile(process.execPath, [...argumentsList, "stop", "--state-dir", directory]);
@@ -239,6 +246,20 @@ test("CLI starts, inspects, and stops a local service without adapters", async (
     try { await execFile(process.execPath, [...argumentsList, "stop", "--state-dir", directory]); } catch { /* The service may already be stopped. */ }
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("CLI refuses missing or empty source configuration before starting a service", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "flow-cli-empty-source-test-"));
+  const stateDir = join(directory, "state");
+  const sourceConfig = join(directory, "sources.json");
+  const args = [cli, "start", "--state-dir", stateDir, "--port", "47997"];
+  const options = { env: { ...process.env, FLOW_SOURCE_CONFIG: sourceConfig } };
+  try {
+    await assert.rejects(execFile(process.execPath, args, options), /Flow source config is missing/);
+    await writeFile(sourceConfig, JSON.stringify({ schemaVersion: "v1", sources: [] }));
+    await assert.rejects(execFile(process.execPath, args, options), /No flow profiles are configured/);
+    await assert.rejects(readFile(join(stateDir, "service.json"), "utf8"), { code: "ENOENT" });
+  } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
 test("CLI preserves a live service lock when its port does not answer", async () => {

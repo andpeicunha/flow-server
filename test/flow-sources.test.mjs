@@ -109,6 +109,12 @@ test("legacy agent workflow YAML preserves routing, model, skills, conditions, a
   assert.deepEqual(parsed.stopWhen, [{ step: "intake", jsonPath: "decision", notEquals: "ready", status: "needs_confirmation", next: "ask the developer" }]);
 });
 
+test("flow YAML accepts explicit block stop rules and rejects unknown modes", () => {
+  const yaml = "schemaVersion: v2\nid: review-flow\nstopWhen:\n  - step: verify\n    jsonPath: status\n    notEquals: pass\n    status: needs_validation_resolution\n    next: resolve findings\n    mode: block\nnodes:\n  - id: verify\n";
+  assert.equal(parseFlowDocument(yaml, { format: "yaml" }).stopWhen[0].mode, "block");
+  assert.throws(() => parseFlowDocument(yaml.replace("mode: block", "mode: later"), { format: "yaml" }), { code: "INVALID_FLOW_DOCUMENT" });
+});
+
 test("restricted YAML rejects aliases, merge keys, duplicates, unknown fields, and invalid dependencies", () => {
   const documents = [
     "schemaVersion: v1\nid: alias-flow\nnodes:\n  - &node { id: work, title: Work }\n  - *node\n",

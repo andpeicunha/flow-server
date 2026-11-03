@@ -113,6 +113,13 @@ mesmo nó com o número `attempt` para o
 próximo `flow_checkpoint`. O dev não precisa fornecer horários ou IDs de
 recibos. Nenhum nó concluído roda de novo.
 
+Uma regra `stopWhen` com `mode: block` permite corrigir e repetir o próprio
+nó no mesmo run. Exemplo: `independent_verify` conclui com `FAIL`. O dev
+corrige o problema, o agente revisa o worktree e usa `flow_continue`. O
+recibo `FAIL` fica no histórico. A próxima etapa espera o novo checkpoint do
+`independent_verify` com resultado aprovado. Sem `mode: block`, a regra
+encerra o run.
+
 Exemplo: `gate0_check` parou por falta de acesso. O dev corrige o acesso; o
 agente confere e continua em `gate0_check`. Se uma revisão externa ainda
 rejeitar a ação, o agente mantém o run parado. O limite padrão é de três

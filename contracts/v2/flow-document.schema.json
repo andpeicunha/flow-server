@@ -76,7 +76,8 @@
         "equals": { "$ref": "#/$defs/jsonScalar" }, "notEquals": { "$ref": "#/$defs/jsonScalar" },
         "in": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/jsonScalar" } },
         "notIn": { "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/jsonScalar" } },
-        "status": { "type": "string", "minLength": 1, "maxLength": 128 }, "next": { "type": "string", "minLength": 1, "maxLength": 1000 }
+        "status": { "type": "string", "minLength": 1, "maxLength": 128 }, "next": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "mode": { "enum": ["block", "stop"] }
       },
       "anyOf": [
         { "required": ["equals"], "properties": { "equals": { "$ref": "#/$defs/jsonScalar" } } },

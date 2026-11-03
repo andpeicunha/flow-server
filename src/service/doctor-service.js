@@ -31,8 +31,10 @@ export async function diagnoseFlowSetup({ stateDir, sourceConfig, profileId, flo
   });
 
   await check("serviceAndMcpBridge", async () => {
-    const response = await client.list();
-    return { reachableFlows: response.items?.length ?? 0 };
+    const response = await client.list(profileId);
+    const reachableFlows = response.items?.length ?? 0;
+    if (!reachableFlows || (flowId && !response.items.some((flow) => flow.id === flowId))) throw new Error("NO_FLOWS_IN_RUNNING_SERVICE");
+    return { reachableFlows };
   });
 
   const effective = [];

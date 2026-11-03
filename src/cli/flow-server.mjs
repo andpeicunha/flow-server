@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { resolveStateDir } from "../core/state-dir.js";
+import { loadFlowSourceConfig, resolveFlowSourceConfigPath } from "../core/flow-source-config.js";
 import { diagnoseFlowSetup } from "../service/doctor-service.js";
 import { ServiceHost } from "../service/service-host.js";
 import { checkBeforeStart } from "../service/startup-check.js";
@@ -28,7 +29,7 @@ function options(command, argumentsList) {
   const port = values["--port"] === undefined ? 4729 : Number(values["--port"]);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("--port must be an integer from 1 to 65535.");
   if ((values["--profile"] || values["--flow"]) && command !== "doctor") throw new Error("--profile and --flow are supported only by doctor.");
-  return { stateDir: values["--state-dir"] || resolveStateDir({ homeDir: homedir() }), sourceConfig: values["--source-config"], port,
+  return { stateDir: values["--state-dir"] || resolveStateDir({ homeDir: homedir() }), sourceConfig: resolveFlowSourceConfigPath({ explicit: values["--source-config"] }), port,
     profileId: values["--profile"], flowId: values["--flow"] };
 }
 
@@ -53,8 +54,13 @@ async function serve(configuration) {
 async function start(configuration) {
   const check = await checkBeforeStart(configuration);
   if (check.action === "ready") { console.log(JSON.stringify(check.running)); return; }
+  const source = await loadFlowSourceConfig(configuration.sourceConfig).catch((error) => {
+    if (error.code === "FLOW_SOURCE_CONFIG_NOT_FOUND") throw new Error(`Flow source config is missing: ${configuration.sourceConfig}. Configure a source in the Herdr plugin or pass --source-config.`);
+    throw error;
+  });
+  if (!source.sources.length) throw new Error(`No flow profiles are configured in ${configuration.sourceConfig}.`);
   const childArguments = [fileURLToPath(import.meta.url), "serve", "--state-dir", configuration.stateDir, "--port", String(configuration.port)];
-  if (configuration.sourceConfig) childArguments.push("--source-config", configuration.sourceConfig);
+  childArguments.push("--source-config", configuration.sourceConfig);
   const child = spawn(process.execPath, childArguments, { detached: true, stdio: "ignore" });
   child.unref();
   for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -90,7 +96,7 @@ async function stop(configuration) {
 
 async function doctor(configuration) {
   const result = await diagnoseFlowSetup({ stateDir: configuration.stateDir,
-    sourceConfig: configuration.sourceConfig || process.env.FLOW_SOURCE_CONFIG || `${homedir()}/.config/flow-server/sources.json`,
+    sourceConfig: configuration.sourceConfig,
     profileId: configuration.profileId, flowId: configuration.flowId });
   console.log(JSON.stringify(result));
   if (result.status === "not_ready") process.exitCode = 1;

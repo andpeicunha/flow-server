@@ -86,7 +86,12 @@ export function planFlowNext(flow, run, receiptList) {
     if (receipts.get(rule.step).status === "skipped") continue;
     const result = evaluateCondition(rule, receipts);
     if (!result.known) return { status: "blocked", reason: "STOP_RULE_OUTPUT_MISSING", nodeId: rule.step };
-    if (result.matches) return { status: "stopped", stop: { nodeId: rule.step, status: rule.status, next: rule.next } };
+    if (result.matches) {
+      const details = { nodeId: rule.step, status: rule.status, next: rule.next };
+      return rule.mode === "block"
+        ? { status: "blocked", reason: "STOP_RULE", nodeId: rule.step, block: details }
+        : { status: "stopped", stop: details };
+    }
   }
 
   const skipped = [];

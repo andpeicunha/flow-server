@@ -7,7 +7,7 @@ const nodeIdentifier = /^[a-z][a-z0-9_-]{0,62}$/;
 const safeText = (value, max = 64 * 1024) => typeof value === "string" && value.length <= max;
 const rootKeys = new Set(["schemaVersion", "id", "name", "title", "description", "keepAwake", "route", "routing", "stopWhen", "nodes"]);
 const nodeKeys = new Set(["id", "title", "after", "dependsOn", "agent", "role", "model", "effort", "variant", "executor", "skills", "constraints", "prompt", "input", "output", "when", "evidencePolicy", "timeout", "retry", "parallelSafe"]);
-const stopKeys = new Set(["step", "jsonPath", "equals", "notEquals", "in", "notIn", "status", "next"]);
+const stopKeys = new Set(["step", "jsonPath", "equals", "notEquals", "in", "notIn", "status", "next", "mode"]);
 const whenKeys = new Set(["step", "jsonPath", "equals", "notEquals", "in", "notIn"]);
 export const flowDocumentLimits = Object.freeze({ bytes: 256 * 1024, depth: 32, scalarLength: 64 * 1024, collectionLength: 2048, nodes: 256 });
 
@@ -83,6 +83,7 @@ export function validateFlowDocument(input) {
       && (value.routing.priority === undefined || (Number.isInteger(value.routing.priority) && value.routing.priority >= 0 && value.routing.priority <= 1000))))
     && (value.stopWhen === undefined || (Array.isArray(value.stopWhen) && value.stopWhen.length <= 64
       && value.stopWhen.every((rule) => validCondition(rule, stopKeys)
+        && (rule.mode === undefined || ["block", "stop"].includes(rule.mode))
         && safeText(rule.status, 128) && rule.status.length > 0 && safeText(rule.next, 1000) && rule.next.length > 0)))
     && Array.isArray(value.nodes) && value.nodes.length >= 1 && value.nodes.length <= flowDocumentLimits.nodes;
   if (!validRoot) fail();

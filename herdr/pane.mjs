@@ -5,13 +5,13 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
-import { loadFlowSourceConfig, validateFlowSourceConfig } from "../src/core/flow-source-config.js";
+import { loadFlowSourceConfig, resolveFlowSourceConfigPath, validateFlowSourceConfig } from "../src/core/flow-source-config.js";
 import { resolveStateDir } from "../src/core/state-dir.js";
 import { LocalFlowClient } from "../src/mcp/local-client.js";
 import { FlowSourceService } from "../src/service/flow-source-service.js";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const configPath = process.env.FLOW_SOURCE_CONFIG || join(homedir(), ".config", "flow-server", "sources.json");
+const configPath = resolveFlowSourceConfigPath();
 const stateDir = resolveStateDir({ homeDir: homedir() });
 const port = process.env.FLOW_SERVICE_PORT || "4741";
 const terminal = createInterface({ input: process.stdin, output: process.stdout });

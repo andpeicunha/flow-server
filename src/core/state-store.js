@@ -32,7 +32,7 @@ export class FileStateStore {
 
   async archiveFailedReceipt(receipt, retryDecision) {
     assertRunId(receipt.runId);
-    if (!/^[a-z][a-z0-9_-]{0,62}$/.test(receipt.nodeId) || receipt.status !== "failed") throw new TypeError("Only a failed node receipt can be archived.");
+    if (!/^[a-z][a-z0-9_-]{0,62}$/.test(receipt.nodeId) || !["failed", "completed"].includes(receipt.status)) throw new TypeError("Only a failed or completed node receipt can be archived for retry.");
     const attempt = receipt.attempt ?? 1;
     if (!Number.isInteger(attempt) || attempt < 1 || attempt > 100) throw new TypeError("Invalid receipt attempt.");
     const target = join(this.runDirectory(receipt.runId), "attempts", `receipt-${receipt.nodeId}-${attempt}.json`);
@@ -53,7 +53,7 @@ export class FileStateStore {
       const withoutTime = ({ requestedAt, ...decision } = {}) => decision;
       if (JSON.stringify(existingReceipt) !== JSON.stringify(proposedReceipt) ||
         JSON.stringify(withoutTime(existingDecision)) !== JSON.stringify(withoutTime(proposedDecision))) {
-        throw new TypeError("Archived attempt differs from the current failed receipt or review.");
+        throw new TypeError("Archived attempt differs from the current receipt or review.");
       }
       acceptedDecision = existingDecision;
     } finally {

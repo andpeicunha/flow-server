@@ -8,13 +8,15 @@ connects only to `http://127.0.0.1`. It never runs shell commands, reads run
 directories, or starts Codex or Claude adapters.
 
 Install this repository locally, then start the service. For private flows,
-pass an explicit source configuration (the Herdr plugin creates one on first
-use):
+the CLI reads `~/.config/flow-server/sources.json` by default (the Herdr
+plugin creates it on first use). Set `FLOW_SOURCE_CONFIG` or pass
+`--source-config` to use another file. Startup fails if the selected file is
+missing or has no profiles:
 
 ```sh
 npm link
 flow-server start
-# Or: flow-server start --source-config ~/.config/flow-server/sources.json --port 4741
+# For another file: flow-server start --source-config /absolute/path/to/sources.json
 ```
 
 Add this MCP server to Codex:
@@ -54,12 +56,13 @@ example.
 Use `flow_lifecycle` to pause, resume, stop, or fail a run; completion is automatic.
 If a ready node cannot run before a checkpoint, call `flow_block` with the
 reason and node ID. After the developer fixes the problem, use `flow_continue`
-on the same run. If a node has a failed receipt, first use
+on the same run. If a node has a failed receipt or a completed receipt that
+triggered `stopWhen` with `mode: block`, first use
 `flow_retry_inspect` to review its predecessors and pinned worktree. Stop if a
 completed predecessor is wrong. Then call `flow_continue` with a short reason,
 the pinned workspace, a factual `worktreeReview`, and `reviewedPredecessors: true`
 only after reviewing every predecessor. The service archives the
-failure and returns only that node with its new `attempt` number. A paused run
+old receipt and returns only that node with its new `attempt` number. A paused run
 requires `flow_lifecycle` with `resume` first. Terminal runs cannot continue.
 `flow_retry_node` remains available for older clients but is no longer the
 normal path for guided runs.

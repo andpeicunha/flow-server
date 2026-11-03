@@ -173,6 +173,11 @@ Start the service with the explicit file:
 flow-server start --source-config /absolute/path/to/sources.yaml
 ```
 
+Without `--source-config`, `flow-server start` uses
+`~/.config/flow-server/sources.json`. `FLOW_SOURCE_CONFIG` overrides that
+default. Startup rejects a missing file or a file with no profiles; `doctor`
+also fails if the running service exposes no flows.
+
 Validate and record a changed flow without performing any Git mutation:
 
 ```sh
@@ -200,6 +205,13 @@ reason and pending node. After the developer fixes the issue, `flow_continue`
 records the resolution and returns that node in the same run. `flow_next` also
 records blocks found in dependencies. A stopped run keeps its stop rule in
 `flow_inspect`, so the developer can see why it ended.
+
+Set `mode: block` on a `stopWhen` rule when the developer can fix its result.
+After the fix, the agent checks the pinned worktree and earlier nodes, then
+calls `flow_continue`. The service keeps the old receipt in the attempt history
+and returns the same node with a new `attempt`. The next node stays locked until
+the new checkpoint satisfies the rule. Without `mode: block`, a stop rule ends
+the run as before.
 
 For the full sequence in plain language, see the [quick guide](docs/guia-rapido.md).
 

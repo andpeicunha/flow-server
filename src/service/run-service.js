@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { FlowError } from "../core/errors.js";
 import { transitionRun } from "../core/lifecycle.js";
 import { isRfc3339DateTime } from "../core/date-time.js";
-import { planFlowNext } from "./flow-scheduler.js";
+import { evaluateCondition, planFlowNext } from "./flow-scheduler.js";
 
 const publicRun = ({ workspace, flowDefinition, retry, ...run }) => run;
 
@@ -168,6 +168,38 @@ export class RunService {
     if (typeof reason !== "string" || !reason.trim() || reason.length > 2000) throw new FlowError("INVALID_RESOLUTION", "Describe what fixed the block before continuing.");
     const receipts = await this.stateStore.listReceipts(id);
     const failures = receipts.filter((receipt) => receipt.status === "failed");
+    if (run.block.reason === "STOP_RULE") {
+      const nodeId = run.block.nodeId;
+      const current = receipts.find((receipt) => receipt.nodeId === nodeId);
+      const plannedBlock = planFlowNext(run.flowDefinition, run, receipts);
+      if (!current || current.status !== "completed" || plannedBlock.status !== "blocked" || plannedBlock.reason !== "STOP_RULE" || plannedBlock.nodeId !== nodeId) {
+        throw new FlowError("BLOCK_NOT_RESOLVED", "The stop-rule receipt changed. Inspect the run before continuing.");
+      }
+      if (failures.length || reviewedPredecessors !== true || typeof worktreeReview !== "string" || !worktreeReview.trim() || worktreeReview.length > 2000) {
+        throw new FlowError("CONTINUE_REVIEW_REQUIRED", "Review the pinned worktree and completed predecessors before retrying the blocked node.");
+      }
+      if (workspace !== run.workspace || typeof workspace !== "string") throw new FlowError("RETRY_WORKSPACE_MISMATCH", "The retry must use the run's pinned workspace.");
+      const predecessors = predecessorsOf(run.flowDefinition, nodeId);
+      if (predecessors.some((parent) => !["completed", "skipped"].includes(receipts.find((item) => item.nodeId === parent)?.status))) {
+        throw new FlowError("RETRY_PREDECESSOR_UNSAFE", "A predecessor is failed or missing. Inspect it before retrying.");
+      }
+      const node = run.flowDefinition.nodes.find((item) => item.id === nodeId);
+      const attempt = current.attempt ?? 1;
+      if (attempt > (node.retry ?? 3)) throw new FlowError("RETRY_LIMIT_REACHED", "This node has reached its configured retry limit.");
+      if (run.retry) throw new FlowError("RETRY_ALREADY_PENDING", "Complete the pending node retry before requesting another.");
+      const plannedRetry = planFlowNext(run.flowDefinition, run, receipts.filter((item) => item.nodeId !== nodeId));
+      if (plannedRetry.status !== "ready" || !plannedRetry.nodes.some((item) => item.id === nodeId)) {
+        throw new FlowError("BLOCK_NOT_RESOLVED", "The node is not ready after reviewing its predecessors.");
+      }
+      const decision = { reason: reason.trim(), worktreeReview, reviewedNodeIds: predecessors, requestedAt: this.now() };
+      const archivedDecision = await this.stateStore.archiveFailedReceipt(current, decision);
+      run.retry = { nodeId, attempt: attempt + 1, ...archivedDecision };
+      run.blockHistory = [...(run.blockHistory ?? []), { ...run.block, resolution: reason.trim(), resolvedAt: this.now() }];
+      delete run.block;
+      run.status = transitionRun(run.status, "continue");
+      await this.stateStore.writeRun(run);
+      return { ...publicRun(run), next: this.readyNodesWithAttempt(plannedRetry.nodes.filter((item) => item.id === nodeId), run) };
+    }
     if (failures.length) {
       if (reviewedPredecessors !== true || typeof worktreeReview !== "string" || !worktreeReview.trim() || worktreeReview.length > 2000) {
         throw new FlowError("CONTINUE_REVIEW_REQUIRED", "Review the pinned worktree and completed predecessors before continuing a failed node.");
@@ -325,7 +357,7 @@ export class RunService {
     if (run.status === "completed") return { status: "done", nodes: [] };
     if (["stopped", "failed"].includes(run.status)) return { status: "blocked", reason: "RUN_TERMINAL", runStatus: run.status, ...(run.stop ? { stop: run.stop } : {}) };
     if (run.status === "paused") return { status: "blocked", reason: "RUN_PAUSED", runStatus: run.status };
-    if (run.status === "blocked") return { status: "blocked", reason: run.block?.reason ?? "RUN_BLOCKED", nodeId: run.block?.nodeId, ...(run.block?.details ? { details: run.block.details } : {}), runStatus: run.status, action: "Resolve the issue, then call flow_continue." };
+    if (run.status === "blocked") return { status: "blocked", reason: run.block?.reason ?? "RUN_BLOCKED", nodeId: run.block?.nodeId, ...(run.block?.status ? { block: { nodeId: run.block.nodeId, status: run.block.status, next: run.block.next } } : {}), ...(run.block?.details ? { details: run.block.details } : {}), runStatus: run.status, action: "Resolve the issue, then call flow_continue." };
     if (run.status === "created") {
       run = { ...run, status: transitionRun(run.status, "start") };
       await this.stateStore.writeRun(run);
@@ -344,7 +376,7 @@ export class RunService {
       run.stop = result.stop;
       await this.stateStore.writeRun(run);
     } else if (result.status === "blocked") {
-      run = { ...run, status: transitionRun(run.status, "block"), block: { reason: result.reason, ...(result.nodeId ? { nodeId: result.nodeId } : {}), recordedAt: this.now() } };
+      run = { ...run, status: transitionRun(run.status, "block"), block: { reason: result.reason, ...(result.nodeId ? { nodeId: result.nodeId } : {}), ...(result.block ? { status: result.block.status, next: result.block.next } : {}), recordedAt: this.now() } };
       await this.stateStore.writeRun(run);
     } else if (result.status === "done") {
       run = { ...run, status: transitionRun(run.status, "complete") };
@@ -355,7 +387,7 @@ export class RunService {
 
   async planNextForRun(run) {
     const stored = await this.stateStore.listReceipts(run.id);
-    const receipts = run.retry && stored.some((item) => item.nodeId === run.retry.nodeId && item.status === "failed")
+    const receipts = run.retry && stored.some((item) => item.nodeId === run.retry.nodeId && item.attempt !== run.retry.attempt)
       ? stored.filter((item) => item.nodeId !== run.retry.nodeId) : stored;
     const planned = planFlowNext(run.flowDefinition, run, receipts);
     const skippedNodeIds = [];
@@ -370,7 +402,7 @@ export class RunService {
       skippedNodeIds.push(skipped.nodeId);
     }
     const allStored = skippedNodeIds.length ? await this.stateStore.listReceipts(run.id) : receipts;
-    const allReceipts = run.retry && allStored.some((item) => item.nodeId === run.retry.nodeId && item.status === "failed")
+    const allReceipts = run.retry && allStored.some((item) => item.nodeId === run.retry.nodeId && item.attempt !== run.retry.attempt)
       ? allStored.filter((item) => item.nodeId !== run.retry.nodeId) : allStored;
     const result = skippedNodeIds.length ? planFlowNext(run.flowDefinition, run, allReceipts) : planned;
     return { result, skippedNodeIds };
@@ -399,6 +431,8 @@ export class RunService {
       : run.status === "completed" && run.flowDefinition?.nodes && findings.length === 0 ? "passed" : "incomplete";
     return { schemaVersion: "v1", runId: id, result, findings,
       ...(run.blockHistory?.length ? { blockHistory: run.blockHistory } : {}),
-      ...(retryHistory.length ? { retryHistory: retryHistory.map((receipt) => ({ nodeId: receipt.nodeId, attempt: receipt.attempt ?? 1, status: receipt.status, recordedAt: receipt.recordedAt, reason: receipt.retryDecision?.reason, reviewedNodeIds: receipt.retryDecision?.reviewedNodeIds })) } : {}) };
+      ...(retryHistory.length ? { retryHistory: retryHistory.map((receipt) => ({ nodeId: receipt.nodeId, attempt: receipt.attempt ?? 1, status: receipt.status,
+        ...(receipt.status === "completed" && (run.flowDefinition?.stopWhen ?? []).some((rule) => rule.mode === "block" && rule.step === receipt.nodeId && evaluateCondition(rule, new Map([[receipt.nodeId, receipt]])).matches === true) ? { stopRuleBlocked: true } : {}),
+        recordedAt: receipt.recordedAt, reason: receipt.retryDecision?.reason, reviewedNodeIds: receipt.retryDecision?.reviewedNodeIds })) } : {}) };
   }
 }

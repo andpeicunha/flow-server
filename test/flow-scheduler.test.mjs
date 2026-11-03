@@ -38,6 +38,17 @@ test("flow scheduler blocks missing conditional output and honors stop rules", (
   assert.equal(stopped.stop.status, "needs_confirmation");
 });
 
+test("stopWhen mode block returns a resolvable block while the default remains terminal", () => {
+  const base = { id: "rule-flow", nodes: [{ id: "check" }, { id: "closeout", after: ["check"] }] };
+  const rule = { step: "check", jsonPath: "status", notEquals: "pass", status: "needs_validation_resolution", next: "fix tests" };
+  const failedCheck = [completed("check", { status: "FAIL" })];
+  assert.deepEqual(planFlowNext({ ...base, stopWhen: [{ ...rule, mode: "block" }] }, {}, failedCheck), {
+    status: "blocked", reason: "STOP_RULE", nodeId: "check",
+    block: { nodeId: "check", status: "needs_validation_resolution", next: "fix tests" }
+  });
+  assert.equal(planFlowNext({ ...base, stopWhen: [rule] }, {}, failedCheck).status, "stopped");
+});
+
 test("conditional skips satisfy joins and context carries completed node outputs", () => {
   const branching = {
     nodes: [

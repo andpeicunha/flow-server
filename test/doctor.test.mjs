@@ -33,6 +33,7 @@ test("doctor reports a missing Skill and MCP registration as failures", async ()
   });
   assert.equal(result.status, "not_ready");
   assert.equal(result.checks.find((item) => item.name === "codexMcpRegistration").status, "failed");
+  assert.equal(result.checks.find((item) => item.name === "serviceAndMcpBridge").status, "failed");
   assert.deepEqual(result.checks.find((item) => item.name === "skills").missing, ["codex:test-evidence-audit"]);
 });
 
@@ -41,11 +42,33 @@ test("doctor checks Claude MCP and Claude Skills for a Claude machine", async ()
   source.sources[0].execution = { runtime: "claude" };
   const commands = [];
   const result = await diagnoseFlowSetup({ stateDir: "/unused", sourceConfig: "/unused", homeDir: "/home/test",
-    sourceService: source, client: { list: async () => ({ items: [] }) },
+    sourceService: source, client: { list: async () => ({ items: [{ id: "sample" }] }) },
     runCommand: async (...args) => { commands.push(args); return { stdout: "flow-server:\n  Status: ✔ Connected\n  Type: stdio\n  Command: /bin/flow-mcp\n" }; },
     fileAccess: async (path) => { assert.match(path, /\.claude\/skills\/test-evidence-audit\/SKILL\.md$/); }
   });
   assert.equal(result.status, "ready_for_run_test", JSON.stringify(result.checks));
   assert.equal(result.checks.find((item) => item.name === "claudeMcpRegistration").status, "passed");
   assert.deepEqual(commands[0][1], ["mcp", "get", "flow-server"]);
+});
+
+test("doctor rejects a healthy service with no loaded flows", async () => {
+  const result = await diagnoseFlowSetup({ stateDir: "/unused", sourceConfig: "/unused", homeDir: "/home/test",
+    sourceService: sourceService(), client: { list: async () => ({ items: [] }) },
+    runCommand: async () => ({ stdout: JSON.stringify({ enabled: true, transport: { type: "stdio", command: "flow-mcp", args: [] } }) }),
+    fileAccess: async () => {}
+  });
+  assert.equal(result.status, "not_ready");
+  assert.equal(result.checks.find((item) => item.name === "serviceAndMcpBridge").reason, "NO_FLOWS_IN_RUNNING_SERVICE");
+});
+
+test("doctor rejects a requested flow missing from the running service", async () => {
+  const result = await diagnoseFlowSetup({ stateDir: "/unused", sourceConfig: "/unused", homeDir: "/home/test",
+    profileId: "personal", flowId: "wanted",
+    sourceService: { ...sourceService(), catalog: { listEntries: async () => [{ sourceId: "personal", flow: { id: "wanted", nodes: [] } }] } },
+    client: { list: async (profileId) => { assert.equal(profileId, "personal"); return { items: [{ id: "other" }] }; } },
+    runCommand: async () => ({ stdout: JSON.stringify({ enabled: true, transport: { type: "stdio", command: "flow-mcp", args: [] } }) }),
+    fileAccess: async () => {}
+  });
+  assert.equal(result.status, "not_ready");
+  assert.equal(result.checks.find((item) => item.name === "serviceAndMcpBridge").reason, "NO_FLOWS_IN_RUNNING_SERVICE");
 });

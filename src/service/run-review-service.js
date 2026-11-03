@@ -1,5 +1,6 @@
 import { FlowError } from "../core/errors.js";
 import { isRfc3339DateTime, rfc3339TimeValue } from "../core/date-time.js";
+import { evaluateCondition } from "./flow-scheduler.js";
 
 const flowIdPattern = /^[a-z][a-z0-9-]{0,62}$/;
 const profileIdPattern = /^[a-z][a-z0-9-]{0,62}$/;
@@ -16,7 +17,7 @@ function nodeSummary(receipts) {
   for (const receipt of receipts) {
     const current = byNode.get(receipt.nodeId) ?? { nodeId: receipt.nodeId, receipts: 0, completed: 0, failed: 0, skipped: 0, retries: 0, durations: [], validationFailures: 0, signals: 0, missingMetrics: 0 };
     current.receipts += 1;
-    current[receipt.status] += 1;
+    current[receipt.stopRuleBlocked ? "failed" : receipt.status] += 1;
     current.retries += (receipt.attempt ?? 1) > 1 ? 1 : 0;
     if (Number.isInteger(receipt.durationMs)) current.durations.push(receipt.durationMs);
     else current.missingMetrics += 1;
@@ -75,7 +76,9 @@ export class RunReviewService {
       const actual = new Set(receipts.map((receipt) => receipt.nodeId));
       const missingNodeIds = expected ? [...expected].filter((nodeId) => !actual.has(nodeId)).sort() : [];
       const unexpectedNodeIds = expected ? [...actual].filter((nodeId) => !expected.has(nodeId)).sort() : [];
-      return { run, receipts, history, evidence: { runId: run.id, completeness: expected ? (missingNodeIds.length || unexpectedNodeIds.length ? "incomplete" : "complete") : "unknown", missingNodeIds, unexpectedNodeIds } };
+      const markedHistory = history.map((receipt) => ({ ...receipt, stopRuleBlocked: receipt.status === "completed" && (run.flowDefinition?.stopWhen ?? []).some((rule) =>
+        rule.mode === "block" && rule.step === receipt.nodeId && evaluateCondition(rule, new Map([[receipt.nodeId, receipt]])).matches === true) }));
+      return { run, receipts, history: markedHistory, evidence: { runId: run.id, completeness: expected ? (missingNodeIds.length || unexpectedNodeIds.length ? "incomplete" : "complete") : "unknown", missingNodeIds, unexpectedNodeIds } };
     }));
     const groups = new Map();
     for (const item of runsWithReceipts) {
