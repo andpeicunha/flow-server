@@ -116,7 +116,7 @@ export function createHttpServer({ runService, runReviewService, flowSourceServi
       if (request.method === "GET" && url.pathname === "/v1/sources") return send(response, 200, { items: flowSourceService ? await flowSourceService.status() : [] });
       if (request.method === "GET" && url.pathname === "/v1/runs") return send(response, 200, page(await runService.list({ flowId: url.searchParams.get("flowId") || undefined, profileId: url.searchParams.get("profileId") || undefined, runId: url.searchParams.get("runId") || undefined }), url));
 
-      const runMatch = url.pathname.match(/^\/v1\/runs\/(run_[a-z0-9-]{1,63})(?:\/(checkpoint|lifecycle|audit|next|retry|block|continue))?$/);
+      const runMatch = url.pathname.match(/^\/v1\/runs\/(run_[a-z0-9-]{1,63})(?:\/(checkpoint|lifecycle|audit|next|retry|block|continue|switch-runtime))?$/);
       if (request.method === "GET" && runMatch?.[2] === undefined) return send(response, 200, await runService.get(runMatch[1]));
       if (request.method === "GET" && runMatch?.[2] === "audit") return send(response, 200, await runService.audit(runMatch[1]));
       if (request.method === "GET" && runMatch?.[2] === "retry") {
@@ -161,6 +161,10 @@ export function createHttpServer({ runService, runReviewService, flowSourceServi
       }
       if (request.method === "POST" && runMatch?.[2] === "continue") {
         const result = await mutation(request, body, async () => ({ status: 200, body: await runService.continueRun(runMatch[1], body) }));
+        return send(response, result.status, result.body);
+      }
+      if (request.method === "POST" && runMatch?.[2] === "switch-runtime") {
+        const result = await mutation(request, body, async () => ({ status: 200, body: await runService.switchNode(runMatch[1], body) }));
         return send(response, result.status, result.body);
       }
       if (request.method === "POST" && runMatch?.[2] === "next") {

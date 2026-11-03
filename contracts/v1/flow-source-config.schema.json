@@ -26,7 +26,15 @@
             "properties": {
               "runtime": { "enum": ["codex", "claude"] },
               "models": { "type": "object", "maxProperties": 64, "propertyNames": { "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$" }, "additionalProperties": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$" } },
-              "efforts": { "type": "object", "propertyNames": { "enum": ["low", "medium", "high", "xhigh", "max", "ultra"] }, "additionalProperties": { "enum": ["low", "medium", "high", "xhigh", "max", "ultra"] } }
+              "efforts": { "type": "object", "propertyNames": { "enum": ["low", "medium", "high", "xhigh", "max", "ultra"] }, "additionalProperties": { "enum": ["low", "medium", "high", "xhigh", "max", "ultra"] } },
+              "fallback": {
+                "type": "object", "additionalProperties": false, "required": ["runtime", "models"],
+                "properties": {
+                  "runtime": { "enum": ["codex", "claude"] },
+                  "models": { "type": "object", "maxProperties": 64, "propertyNames": { "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$" }, "additionalProperties": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$" } },
+                  "agents": { "type": "object", "maxProperties": 32, "propertyNames": { "pattern": "^[a-z][a-z0-9_-]{0,62}$" }, "additionalProperties": { "type": "object", "additionalProperties": false, "required": ["model"], "properties": { "model": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$" }, "effort": { "enum": ["low", "medium", "high", "xhigh", "max", "ultra"] } } } }
+                }
+              }
             }
           },
           "sync": {

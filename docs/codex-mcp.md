@@ -64,6 +64,15 @@ the pinned workspace, a factual `worktreeReview`, and `reviewedPredecessors: tru
 only after reviewing every predecessor. The service archives the
 old receipt and returns only that node with its new `attempt` number. A paused run
 requires `flow_lifecycle` with `resume` first. Terminal runs cannot continue.
+
+A source may configure a fallback runtime for new runs. `flow_next` pins each
+ready node's runtime, model, effort, and attempt. If the provider reaches a
+limit before a checkpoint, use `flow_block` with `reasonCode: "RATE_LIMIT"`.
+Inspect the node with `flow_retry_inspect`, review the pinned worktree and
+predecessors, then call `flow_switch_runtime` with the node ID, pinned workspace,
+reason, worktree review, and `reviewedPredecessors: true`. Use the returned
+runtime, model, effort, and attempt in the next receipt. Profiles without a
+fallback cannot switch runtimes.
 `flow_retry_node` remains available for older clients but is no longer the
 normal path for guided runs.
 Use `flow_inspect` and `flow_audit` for run review. Audit reports `passed` only

@@ -1,5 +1,6 @@
 import { execFile as execFileCallback } from "node:child_process";
 import { access } from "node:fs/promises";
+import { lookup } from "node:dns/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -11,7 +12,7 @@ const execFile = promisify(execFileCallback);
 export async function diagnoseFlowSetup({ stateDir, sourceConfig, profileId, flowId, homeDir = homedir(),
   sourceService = new FlowSourceService({ configPath: sourceConfig }),
   client = new LocalFlowClient({ stateDir }),
-  runCommand = execFile, fileAccess = access } = {}) {
+  runCommand = execFile, fileAccess = access, resolveHost = lookup } = {}) {
   const checks = [];
   const check = async (name, operation) => {
     try { checks.push({ name, status: "passed", ...(await operation()) }); }
@@ -44,6 +45,9 @@ export async function diagnoseFlowSetup({ stateDir, sourceConfig, profileId, flo
         ? await sourceService.resolve({ flowId: entry.flow.id, profileId: entry.sourceId })
         : { flowDefinition: entry.flow, runtime: sourceService.sources.find((source) => source.id === entry.sourceId)?.execution?.runtime };
       effective.push({ flow: resolved.flowDefinition, runtime: resolved.runtime ?? "codex" });
+      if (resolved.fallbackExecutions) effective.push({ runtime: Object.values(resolved.fallbackExecutions)[0]?.runtime,
+        flow: { nodes: resolved.flowDefinition.nodes.map((node) => ({ ...node,
+          model: resolved.fallbackExecutions[node.id].model, effort: resolved.fallbackExecutions[node.id].effort })) } });
     }
     return { runtimes: [...new Set(effective.map((item) => item.runtime))].sort() };
   });
@@ -61,6 +65,22 @@ export async function diagnoseFlowSetup({ stateDir, sourceConfig, profileId, flo
         if (!config.enabled || config.transport?.type !== "stdio" || !/(^|[ /])flow-mcp(?:\.mjs)?(?:\s|$)/.test(command)) throw new Error("FLOW_MCP_NOT_CONFIGURED");
       }
       return { transport: "stdio" };
+    });
+  }
+
+  if (effective.some(({ flow, runtime }) => runtime === "codex" && flow.nodes?.some((node) => node.skills?.includes("prv-ds-compliance")))) {
+    let designSystemUrl;
+    await check("codexDesignSystemMcpRegistration", async () => {
+      const { stdout } = await runCommand("codex", ["mcp", "get", "pravaler-ds", "--json"], { timeout: 5_000 });
+      const config = JSON.parse(stdout);
+      if (!config.enabled || config.transport?.type !== "streamable_http") throw new Error("PRAVALER_DS_MCP_NOT_CONFIGURED");
+      designSystemUrl = config.transport.url;
+      return { transport: "streamable_http" };
+    });
+    if (designSystemUrl) await check("codexDesignSystemMcpDns", async () => {
+      const host = new URL(designSystemUrl).hostname;
+      await resolveHost(host);
+      return { reachable: true };
     });
   }
 

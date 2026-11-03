@@ -18,8 +18,10 @@
     "executionMode": { "enum": ["guided", "direct"] },
     "status": { "enum": ["created", "running", "paused", "blocked", "stopped", "completed", "failed"] },
     "createdAt": { "type": "string", "format": "date-time" },
-    "block": { "type": "object", "additionalProperties": false, "required": ["reason", "recordedAt"], "properties": { "reason": { "type": "string", "maxLength": 2000 }, "details": { "type": "string", "maxLength": 2000 }, "nodeId": { "type": "string" }, "recordedAt": { "type": "string", "format": "date-time" } } },
+    "block": { "type": "object", "additionalProperties": false, "required": ["reason", "recordedAt"], "properties": { "reason": { "type": "string", "maxLength": 2000 }, "details": { "type": "string", "maxLength": 2000 }, "nodeId": { "type": "string" }, "status": { "type": "string" }, "next": { "type": "string" }, "recordedAt": { "type": "string", "format": "date-time" } } },
     "blockHistory": { "type": "array", "items": { "type": "object" } },
+    "nodeExecutions": { "type": "object", "additionalProperties": { "type": "object" } },
+    "executionHistory": { "type": "array", "items": { "type": "object" } },
     "stop": { "type": "object" }
   },
   "allOf": [{ "if": { "required": ["flowSourceId"] }, "then": { "required": ["profileId"] } }]

@@ -44,7 +44,7 @@ test("flow-mcp uses only the local service for guided runs and audits", async ()
 });
 
 test("flow-mcp advertises a bounded tool set and fails unavailable actions closed", async () => {
-  assert.deepEqual(tools.map((tool) => tool.name), ["flow_list", "flow_select", "flow_inspect", "flow_retry_inspect", "flow_retry_node", "flow_block", "flow_continue", "flow_start_guided", "flow_next", "flow_lifecycle", "flow_checkpoint", "flow_audit", "flow_review", "flow_open"]);
+  assert.deepEqual(tools.map((tool) => tool.name), ["flow_list", "flow_select", "flow_inspect", "flow_retry_inspect", "flow_retry_node", "flow_block", "flow_switch_runtime", "flow_continue", "flow_start_guided", "flow_next", "flow_lifecycle", "flow_checkpoint", "flow_audit", "flow_review", "flow_open"]);
   const initialized = await handleRequest({}, { method: "initialize" });
   assert.equal(initialized.serverInfo.name, "flow-mcp");
   const next = await callTool({ next: async () => ({ status: "ready", nodes: [] }) }, "flow_next", { runId: "run_test" });
@@ -65,6 +65,8 @@ test("flow-mcp advertises a bounded tool set and fails unavailable actions close
   assert.equal(continued.structuredContent.reason, "Developer fixed it");
   assert.equal(continued.structuredContent.workspace, "/work/feature");
   assert.equal(continued.structuredContent.reviewedPredecessors, true);
+  const switched = await callTool({ switchRuntime: async (runId, input) => ({ runId, ...input }) }, "flow_switch_runtime", { runId: "run_test", nodeId: "build", reason: "Claude limit reached", workspace: "/work/feature", worktreeReview: "Checked the worktree.", reviewedPredecessors: true });
+  assert.equal(switched.structuredContent.nodeId, "build");
   const unavailable = await callTool({}, "flow_open", { runId: "run_test" });
   assert.equal(unavailable.isError, true);
   assert.match(unavailable.content[0].text, /MCP_OPERATION_UNAVAILABLE/);

@@ -213,6 +213,37 @@ and returns the same node with a new `attempt`. The next node stays locked until
 the new checkpoint satisfies the rule. Without `mode: block`, a stop rule ends
 the run as before.
 
+### Per-source runtime fallback
+
+A machine can allow one fallback runtime in one source. For example, this
+source starts with Claude and can switch a node to Codex:
+
+```json
+"execution": {
+  "runtime": "claude",
+  "fallback": {
+    "runtime": "codex",
+    "models": {
+      "anthropic/primary-model": "openai/gpt-6.1-terra",
+      "anthropic/review-model": "openai/gpt-6.1-sol"
+    },
+    "agents": { "explorer": { "model": "openai/gpt-6-luna", "effort": "low" } }
+  }
+}
+```
+
+Sources without `fallback` cannot switch runtimes. The allowed models are pinned
+when a new run starts. `flow_next` records and returns the selected runtime,
+model, effort, and attempt for each ready node. The receipt must match them.
+After a real provider limit, call `flow_block` with `reasonCode: "RATE_LIMIT"`.
+Inspect the node and its predecessors with `flow_retry_inspect`, review partial
+work in the pinned worktree, then call `flow_switch_runtime` with the node ID,
+workspace, reason, worktree review, and `reviewedPredecessors: true`. The same
+run returns that node on the fallback runtime with a new attempt. The switch
+stays in the run audit. A provider limit is not a completed checkpoint.
+
+Capacity estimates and automatic switching are not part of this phase.
+
 For the full sequence in plain language, see the [quick guide](docs/guia-rapido.md).
 
 ### Guided run sequence

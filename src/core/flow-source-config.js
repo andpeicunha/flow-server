@@ -9,6 +9,20 @@ const remoteName = /^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/;
 const pushPolicies = new Set(["manual", "confirm", "after-validation"]);
 const efforts = new Set(["low", "medium", "high", "xhigh", "max", "ultra"]);
 const modelId = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/;
+const agentId = /^[a-z][a-z0-9_-]{0,62}$/;
+
+function validFallback(fallback, primaryRuntime) {
+  if (fallback === undefined) return true;
+  if (!fallback || typeof fallback !== "object" || Array.isArray(fallback) || !exactKeys(fallback, new Set(["runtime", "models", "agents"]))) return false;
+  if (!["codex", "claude"].includes(fallback.runtime) || fallback.runtime === primaryRuntime) return false;
+  if (!fallback.models || typeof fallback.models !== "object" || Array.isArray(fallback.models) || Object.keys(fallback.models).length > 64 ||
+    !Object.entries(fallback.models).every(([from, to]) => modelId.test(from) && typeof to === "string" && to.startsWith(fallback.runtime === "codex" ? "openai/" : "anthropic/") && modelId.test(to))) return false;
+  return fallback.agents === undefined || (fallback.agents && typeof fallback.agents === "object" && !Array.isArray(fallback.agents) &&
+    Object.keys(fallback.agents).length <= 32 && Object.entries(fallback.agents).every(([agent, choice]) => agentId.test(agent) &&
+      choice && typeof choice === "object" && !Array.isArray(choice) && exactKeys(choice, new Set(["model", "effort"])) &&
+      typeof choice.model === "string" && choice.model.startsWith(fallback.runtime === "codex" ? "openai/" : "anthropic/") && modelId.test(choice.model) &&
+      (choice.effort === undefined || efforts.has(choice.effort))));
+}
 
 export function resolveFlowSourceConfigPath({ explicit, env = process.env, homeDir = homedir() } = {}) {
   return explicit || env.FLOW_SOURCE_CONFIG || join(homeDir, ".config", "flow-server", "sources.json");
@@ -29,8 +43,9 @@ export function validateFlowSourceConfig(value) {
     const allowed = new Set(["id", "mode", "path", "remote", "branch", "workspaceRoots", "sync", "execution"]);
     const execution = source?.execution;
     const validExecution = execution === undefined || (execution && typeof execution === "object" && !Array.isArray(execution)
-      && exactKeys(execution, new Set(["runtime", "models", "efforts"]))
+      && exactKeys(execution, new Set(["runtime", "models", "efforts", "fallback"]))
       && ["codex", "claude"].includes(execution.runtime)
+      && validFallback(execution.fallback, execution.runtime)
       && (execution.models === undefined || (execution.models && typeof execution.models === "object" && !Array.isArray(execution.models)
         && Object.keys(execution.models).length <= 64
         && Object.entries(execution.models).every(([from, to]) => modelId.test(from) && typeof to === "string" && modelId.test(to))))

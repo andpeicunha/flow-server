@@ -57,6 +57,7 @@ export class LocalFlowClient {
   retryNode(runId, review) { return this.request(`/v1/runs/${encodeURIComponent(runId)}/retry`, { method: "POST", mutate: true, body: review }); }
   block(runId, details) { return this.request(`/v1/runs/${encodeURIComponent(runId)}/block`, { method: "POST", mutate: true, body: details }); }
   continueRun(runId, resolution) { return this.request(`/v1/runs/${encodeURIComponent(runId)}/continue`, { method: "POST", mutate: true, body: resolution }); }
+  switchRuntime(runId, review) { return this.request(`/v1/runs/${encodeURIComponent(runId)}/switch-runtime`, { method: "POST", mutate: true, body: review }); }
   audit(runId) { return this.request(`/v1/runs/${encodeURIComponent(runId)}/audit`); }
   review({ flowId, profileId, last = 20, since, contentHash, compareVersions = false }) {
     return this.request("/v1/reviews", { method: "POST", mutate: true, body: {

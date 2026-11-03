@@ -139,6 +139,7 @@ export class FlowSourceService {
     if (runtime && execution?.runtime && runtime !== execution.runtime) throw new FlowError("RUNTIME_PROFILE_MISMATCH", "The requested runtime differs from this machine's configured runtime.");
     const selectedRuntime = execution?.runtime ?? runtime;
     const flowDefinition = structuredClone(entry.flow);
+    const fallbackExecutions = {};
     if (execution) {
       for (const node of flowDefinition.nodes) {
         if (node.model && execution.models) {
@@ -152,13 +153,22 @@ export class FlowSourceService {
           else node.variant = execution.efforts[effort];
         }
         node.executor = selectedRuntime;
+        if (execution.fallback) {
+          const fallback = execution.fallback;
+          const override = Object.hasOwn(fallback.agents ?? {}, node.agent) ? fallback.agents[node.agent] : undefined;
+          const fallbackModel = override?.model ?? fallback.models[node.model];
+          if (!fallbackModel) throw new FlowError("FALLBACK_MODEL_UNMAPPED", `Node ${node.id} has no fallback model for this machine.`);
+          fallbackExecutions[node.id] = { runtime: fallback.runtime, model: fallbackModel,
+            effort: override?.effort ?? node.effort ?? node.variant ?? "medium" };
+        }
       }
     }
     const gitIdentity = source?.mode === "git" ? await this.gitIdentity(source.path) : undefined;
     if (source?.branch && gitIdentity?.branch !== source.branch) throw new FlowError("FLOW_SOURCE_BRANCH_MISMATCH", `Flow source ${source.id} is not on its configured branch.`);
     if (source && gitIdentity) Object.assign(source, { gitCommit: gitIdentity.commit, currentBranch: gitIdentity.branch });
     return { flowId: entry.flow.id, profileId: selected.profileId, flowSourceId: entry.sourceId, flowContentHash: entry.contentHash,
-      ...(selectedRuntime ? { runtime: selectedRuntime } : {}), flowDefinition, ...(gitIdentity?.commit ? { flowGitCommit: gitIdentity.commit } : {}) };
+      ...(selectedRuntime ? { runtime: selectedRuntime } : {}), flowDefinition,
+      ...(execution?.fallback ? { fallbackExecutions } : {}), ...(gitIdentity?.commit ? { flowGitCommit: gitIdentity.commit } : {}) };
   }
 
   async refreshGitIdentities() {
