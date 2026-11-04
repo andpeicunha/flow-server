@@ -264,3 +264,41 @@ test("sync planner blocks every documented unsafe state", () => {
   assert.deepEqual(blocked.blockers, ["conflicts", "detached-head", "branch-mismatch", "remote-mismatch", "validation-required", "unrelated-changes"]);
   assert.deepEqual(blocked.unrelatedFiles, ["notes.txt"]);
 });
+
+test("tool policy validates patterns, precedence, profiles and resolved registrations", async () => {
+  const { validateFlowToolPolicy } = await import("../src/core/flow-tool-policy.js");
+  const base = { id: "one", mode: "local", path: "/flows", sync: { pull: "confirm", push: "manual" } };
+  const doc = { id: "sample", nodes: [{ id: "first", agent: "reviewer", skills: ["safe-skill"], mcps: ["tools"] }, { id: "second", agent: "reviewer", mcps: [] }] };
+  for (const policy of [{ skills: ["!bad*"] }, { mcps: ["*", "*"] }, { mcps: ["bad?name"] }, { unknown: [] }, { mcpRegistrations: { tools: { other: "x" } } }]) {
+    assert.throws(() => validateFlowSourceConfig({ schemaVersion: "v1", sources: [{ ...base, policy }] }), { code: "INVALID_FLOW_SOURCE_CONFIG" });
+  }
+  validateFlowToolPolicy(base, doc);
+  validateFlowToolPolicy({ ...base, policy: { skills: ["SAFE-*"], mcps: ["*", "!blocked*"] } }, doc);
+  assert.throws(() => validateFlowToolPolicy({ ...base, policy: { mcps: [] } }, doc), { code: "FLOW_TOOL_POLICY_DENIED" });
+  assert.throws(() => validateFlowToolPolicy({ ...base, policy: { mcps: ["*", "!blocked*"], mcpRegistrations: { tools: { codex: "blocked-name" } } } }, doc), /first.*blocked-name.*codex/);
+  assert.throws(() => validateFlowToolPolicy({ ...base, id: "two", policy: { skills: [] } }, doc), /two.*first.*safe-skill/);
+});
+
+test("new runs reload policy and YAML while the existing run remains pinned", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "flow-policy-"));
+  try {
+    const path = join(dir, "flow.json");
+    const source = { id: "personal", mode: "local", path: dir, sync: { pull: "confirm", push: "manual" }, policy: { mcps: ["*"] } };
+    const config = join(await mkdtemp(join(tmpdir(), "flow-policy-config-")), "sources.json");
+    try {
+      await writeFile(path, JSON.stringify({ schemaVersion: "v1", id: "sample", nodes: [{ id: "work", mcps: ["one"] }] }));
+      await writeFile(config, JSON.stringify({ schemaVersion: "v1", sources: [source] }));
+      const service = new FlowSourceService({ configPath: config });
+      await service.initialize();
+      const written = [];
+      const runs = new RunService({ stateStore: { writeRun: async (run) => written.push(run) }, flowResolver: (selection) => service.resolve(selection), createId: () => "run_policy", now: () => "2026-01-01T00:00:00.000Z" });
+      await runs.create({ flowId: "sample", profileId: "personal", runtime: "codex", executionMode: "guided" });
+      await writeFile(path, JSON.stringify({ schemaVersion: "v1", id: "sample", nodes: [{ id: "work", mcps: ["two"] }] }));
+      source.policy.mcps = ["one"];
+      await writeFile(config, JSON.stringify({ schemaVersion: "v1", sources: [source] }));
+      await assert.rejects(runs.create({ flowId: "sample", profileId: "personal", runtime: "codex", executionMode: "guided" }), { code: "FLOW_TOOL_POLICY_DENIED" });
+      assert.deepEqual(written[0].flowDefinition.nodes[0].mcps, ["one"]);
+      assert.equal(written.length, 1);
+    } finally { await rm(config.slice(0, config.lastIndexOf("/")), { recursive: true, force: true }); }
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});

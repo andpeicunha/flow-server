@@ -38,6 +38,7 @@ async function sourceConfig() {
   const config = validateFlowSourceConfig({ schemaVersion: "v1", sources: [{
     id, mode, path, workspaceRoots, sync: { pull: "confirm", push: "manual" }
   }] });
+  await new FlowSourceService({ configPath: "candidate", loadConfig: async () => config }).initialize();
   console.log(`Source: ${path}`);
   console.log(`Workspace: ${workspaceRoots[0] || "none"}`);
   if ((await ask("Save this source? (yes/no)", "no")) !== "yes") throw new Error("Source setup cancelled.");
@@ -72,6 +73,7 @@ function items(value) {
 
 async function main() {
   await sourceConfig();
+  await new FlowSourceService({ configPath }).initialize();
   startService();
   const client = new LocalFlowClient({ stateDir });
   console.log("Flow Server is ready. The local MCP uses this same service.");

@@ -96,7 +96,7 @@
         "agent": { "type": "string", "maxLength": 4096 }, "role": { "type": "string", "maxLength": 4096 },
         "model": { "type": "string", "maxLength": 4096 }, "effort": { "type": "string", "maxLength": 4096 },
         "variant": { "type": "string", "maxLength": 4096 }, "executor": { "type": "string", "maxLength": 4096 },
-        "skills": { "$ref": "#/$defs/stringList" }, "constraints": { "$ref": "#/$defs/stringList" },
+        "skills": { "$ref": "#/$defs/stringList" }, "mcps": { "type": "array", "maxItems": 64, "uniqueItems": true, "items": { "type": "string", "pattern": "^[A-Za-z0-9._:/-]{1,128}$" } }, "constraints": { "$ref": "#/$defs/stringList" },
         "prompt": { "type": "string", "maxLength": 65536 }, "input": { "type": "string", "maxLength": 65536 },
         "output": { "type": "string", "maxLength": 4096 }, "when": { "$ref": "#/$defs/condition" },
         "evidencePolicy": { "type": "string", "maxLength": 4096 }, "timeout": { "type": "integer", "minimum": 1, "maximum": 604800 },

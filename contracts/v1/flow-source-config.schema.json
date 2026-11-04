@@ -5,6 +5,10 @@
   "type": "object",
   "additionalProperties": false,
   "required": ["schemaVersion", "sources"],
+  "$defs": {
+    "name": { "type": "string", "pattern": "^[A-Za-z0-9._:/-]{1,128}$" },
+    "rules": { "type": "array", "maxItems": 64, "uniqueItems": true, "items": { "type": "string", "maxLength": 128, "pattern": "^!?[A-Za-z0-9._:/*-]+$" }, "anyOf": [{ "maxItems": 0 }, { "contains": { "type": "string", "pattern": "^[^!]" } }] }
+  },
   "properties": {
     "schemaVersion": { "const": "v1" },
     "sources": {
@@ -21,6 +25,13 @@
           "remote": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$" },
           "branch": { "type": "string", "minLength": 1, "maxLength": 255 },
           "workspaceRoots": { "type": "array", "maxItems": 64, "uniqueItems": true, "items": { "type": "string", "minLength": 1, "maxLength": 4096 } },
+          "policy": {
+            "type": "object", "additionalProperties": false,
+            "properties": {
+              "skills": { "$ref": "#/$defs/rules" }, "mcps": { "$ref": "#/$defs/rules" },
+              "mcpRegistrations": { "type": "object", "maxProperties": 64, "propertyNames": { "$ref": "#/$defs/name" }, "additionalProperties": { "type": "object", "additionalProperties": false, "properties": { "codex": { "$ref": "#/$defs/name" }, "claude": { "$ref": "#/$defs/name" } } } }
+            }
+          },
           "execution": {
             "type": "object", "additionalProperties": false, "required": ["runtime"],
             "properties": {

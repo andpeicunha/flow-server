@@ -1,10 +1,10 @@
 import { execFile as execFileCallback } from "node:child_process";
 import { access } from "node:fs/promises";
-import { lookup } from "node:dns/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { LocalFlowClient } from "../mcp/local-client.js";
+import { registrationFor } from "../core/flow-tool-policy.js";
 import { FlowSourceService } from "./flow-source-service.js";
 
 const execFile = promisify(execFileCallback);
@@ -12,11 +12,11 @@ const execFile = promisify(execFileCallback);
 export async function diagnoseFlowSetup({ stateDir, sourceConfig, profileId, flowId, homeDir = homedir(),
   sourceService = new FlowSourceService({ configPath: sourceConfig }),
   client = new LocalFlowClient({ stateDir }),
-  runCommand = execFile, fileAccess = access, resolveHost = lookup } = {}) {
+  runCommand = execFile, fileAccess = access } = {}) {
   const checks = [];
   const check = async (name, operation) => {
     try { checks.push({ name, status: "passed", ...(await operation()) }); }
-    catch (error) { checks.push({ name, status: "failed", reason: error.code || error.message || "unavailable" }); }
+    catch (error) { checks.push({ name, status: "failed", reason: error.message || error.code || "unavailable", ...(error.code ? { code: error.code } : {}) }); }
   };
 
   const nodeMajor = Number(process.versions.node.split(".")[0]);
@@ -28,8 +28,12 @@ export async function diagnoseFlowSetup({ stateDir, sourceConfig, profileId, flo
     entries = (await sourceService.catalog.listEntries()).filter((entry) =>
       (!profileId || entry.sourceId === profileId) && (!flowId || entry.flow.id === flowId));
     if (!entries.length) throw new Error("NO_FLOWS_CONFIGURED");
+    if (flowId && !profileId && new Set(entries.map((entry) => entry.sourceId)).size > 1) {
+      throw new Error("FLOW_PROFILE_AMBIGUOUS: specify --profile for this flow ID.");
+    }
     return { profiles: sourceService.sources.filter(({ id }) => !profileId || id === profileId).map(({ id, mode, currentBranch }) => ({ id, mode, ...(currentBranch ? { branch: currentBranch } : {}) })), flowCount: entries.length };
   });
+  if (checks.at(-1).status === "failed") return { status: "not_ready", checks };
 
   await check("serviceAndMcpBridge", async () => {
     const response = await client.list(profileId);
@@ -44,9 +48,9 @@ export async function diagnoseFlowSetup({ stateDir, sourceConfig, profileId, flo
       const resolved = sourceService.resolve
         ? await sourceService.resolve({ flowId: entry.flow.id, profileId: entry.sourceId })
         : { flowDefinition: entry.flow, runtime: sourceService.sources.find((source) => source.id === entry.sourceId)?.execution?.runtime };
-      effective.push({ flow: resolved.flowDefinition, runtime: resolved.runtime ?? "codex" });
-      if (resolved.fallbackExecutions) effective.push({ runtime: Object.values(resolved.fallbackExecutions)[0]?.runtime,
-        flow: { nodes: resolved.flowDefinition.nodes.map((node) => ({ ...node,
+      effective.push({ flow: resolved.flowDefinition, runtime: resolved.runtime ?? "codex", source: sourceService.sources.find((source) => source.id === entry.sourceId) });
+      if (resolved.fallbackExecutions) effective.push({ source: sourceService.sources.find((source) => source.id === entry.sourceId), runtime: Object.values(resolved.fallbackExecutions)[0]?.runtime,
+        flow: { id: resolved.flowDefinition.id, nodes: resolved.flowDefinition.nodes.map((node) => ({ ...node,
           model: resolved.fallbackExecutions[node.id].model, effort: resolved.fallbackExecutions[node.id].effort })) } });
     }
     return { runtimes: [...new Set(effective.map((item) => item.runtime))].sort() };
@@ -68,19 +72,16 @@ export async function diagnoseFlowSetup({ stateDir, sourceConfig, profileId, flo
     });
   }
 
-  if (effective.some(({ flow, runtime }) => runtime === "codex" && flow.nodes?.some((node) => node.skills?.includes("prv-ds-compliance")))) {
-    let designSystemUrl;
-    await check("codexDesignSystemMcpRegistration", async () => {
-      const { stdout } = await runCommand("codex", ["mcp", "get", "pravaler-ds", "--json"], { timeout: 5_000 });
-      const config = JSON.parse(stdout);
-      if (!config.enabled || config.transport?.type !== "streamable_http") throw new Error("PRAVALER_DS_MCP_NOT_CONFIGURED");
-      designSystemUrl = config.transport.url;
-      return { transport: "streamable_http" };
-    });
-    if (designSystemUrl) await check("codexDesignSystemMcpDns", async () => {
-      const host = new URL(designSystemUrl).hostname;
-      await resolveHost(host);
-      return { reachable: true };
+  for (const { flow, runtime, source } of effective) for (const node of flow.nodes ?? []) for (const logical of node.mcps ?? []) {
+    const registration = registrationFor(source?.policy, logical, runtime);
+    await check(`mcp:${source?.id}:${flow.id}:${node.id}:${runtime}:${registration}`, async () => {
+      const args = runtime === "claude" ? ["mcp", "get", registration] : ["mcp", "get", registration, "--json"];
+      const { stdout } = await runCommand(runtime, args, { timeout: 5_000 });
+      if (runtime === "codex") {
+        const config = JSON.parse(stdout);
+        if (!config.enabled) throw new Error("MCP_NOT_CONFIGURED");
+      } else if (!/Connected/i.test(stdout)) throw new Error("MCP_NOT_CONFIGURED");
+      return { profile: source?.id, flow: flow.id, node: node.id, runtime, registration };
     });
   }
 

@@ -5,6 +5,7 @@ import { extname, resolve } from "node:path";
 import { FlowChangeTracker } from "../core/flow-change-tracker.js";
 import { identifyFlowDocument, parseFlowDocument } from "../core/flow-document.js";
 import { loadFlowSourceConfig } from "../core/flow-source-config.js";
+import { validateFlowToolPolicy } from "../core/flow-tool-policy.js";
 import { resolveStateDir } from "../core/state-dir.js";
 
 function parse(argumentsList) {
@@ -21,10 +22,17 @@ function parse(argumentsList) {
   return { positional, values };
 }
 
-async function validate(filePath) {
+async function validate(filePath, values) {
   const path = resolve(filePath);
   const extension = extname(path);
   const flow = parseFlowDocument(await readFile(path, "utf8"), { format: extension === ".json" ? "json" : "yaml", source: path });
+  if (values["--config"] || values["--source"]) {
+    if (!values["--config"] || !values["--source"]) throw new Error("Contextual validation requires --config and --source.");
+    const config = await loadFlowSourceConfig(resolve(values["--config"]));
+    const source = config.sources.find((item) => item.id === values["--source"]);
+    if (!source) throw new Error("Unknown flow source.");
+    validateFlowToolPolicy(source, flow);
+  }
   const { contentHash } = identifyFlowDocument(flow);
   return { status: "valid", flowId: flow.id, contentHash };
 }
@@ -45,7 +53,7 @@ const [command, ...argumentsList] = process.argv.slice(2);
 const { positional, values } = parse(argumentsList);
 try {
   let result;
-  if (command === "validate" && positional.length === 1) result = await validate(positional[0]);
+  if (command === "validate" && positional.length === 1) result = await validate(positional[0], values);
   else if (command === "mark" && positional.length === 0) result = await mark(values);
   else throw new Error("Usage: flow-source <validate FILE|mark --config FILE --source ID --file FILE [--state-dir DIR]>");
   console.log(JSON.stringify(result));

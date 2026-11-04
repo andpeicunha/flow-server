@@ -60,3 +60,18 @@ test("the public example is synthetic and uses v1 run and receipt contracts", as
   assert.equal(audit.synthetic, true);
   assert.deepEqual(audit.findings, []);
 });
+
+test("source and flow schemas accept policy and node MCPs and reject malformed rules", async () => {
+  const sourceSchema = new Ajv2020({ strict: true }).compile(await json("../contracts/v1/flow-source-config.schema.json"));
+  const source = { id: "sample", mode: "local", path: "/flows", sync: { pull: "confirm", push: "manual" }, policy: { skills: ["*", "!other*"], mcps: [], mcpRegistrations: { tools: { codex: "tools-local" } } } };
+  assert.equal(sourceSchema({ schemaVersion: "v1", sources: [source] }), true, JSON.stringify(sourceSchema.errors));
+  source.policy.skills = ["!other*"];
+  assert.equal(sourceSchema({ schemaVersion: "v1", sources: [source] }), false);
+  for (const version of ["v1", "v2"]) {
+    const validate = new Ajv2020({ strict: true }).compile(await json(`../contracts/${version}/flow-document.schema.json`));
+    const flow = { schemaVersion: version, id: "sample", nodes: [{ id: "work", mcps: ["tools"] }] };
+    assert.equal(validate(flow), true, JSON.stringify(validate.errors));
+    flow.nodes[0].mcps = ["bad?name"];
+    assert.equal(validate(flow), false);
+  }
+});

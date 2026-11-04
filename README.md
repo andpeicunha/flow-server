@@ -391,3 +391,26 @@ analyses, and `pending_review` proposals. It never stores release definitions,
 prompts, workspace paths, file bodies, tokens, secrets, or full agent output.
 Use a dedicated writable directory for this one file. The release file stays
 read-only. A VPS deployment and WorkOS OAuth are not included yet.
+
+### Profile tool policy
+
+A source can opt into `policy`; existing sources without it keep their previous behavior. Rules match full names without case sensitivity. `*` matches any number of characters, and a leading `!` denies a match even if another rule allows it. An omitted list is unrestricted; an empty list denies that tool type. Nonempty lists need at least one positive rule. Names are not proof of ownership and do not prevent calls outside flow-server.
+
+```json
+{"schemaVersion":"v1","sources":[
+  {"id":"product-a","mode":"local","path":"/path/to/a/flows","sync":{"pull":"confirm","push":"manual"},"policy":{"skills":["*","!*product-b*"],"mcps":["*","!*product-b*"],"mcpRegistrations":{"design-tools":{"codex":"design-a","claude":"design-a-claude"}}}},
+  {"id":"product-b","mode":"local","path":"/path/to/b/flows","sync":{"pull":"confirm","push":"manual"},"policy":{"skills":["test-evidence-audit"],"mcps":[]}}
+]}
+```
+
+Declare each node's logical MCPs explicitly, including dependencies of its Skills:
+
+```yaml
+nodes:
+  - id: review
+    agent: reviewer
+    skills: [design-review]
+    mcps: [design-tools]
+```
+
+Both logical and runtime registration names must pass the MCP rules. Missing mappings use the logical name. The bridge is checked separately. Validate a file with its profile using `flow-source validate flow.yaml --config /path/to/sources.json --source product-a`. New runs reload the source and policy; active runs retain their pinned flow. Agents must use only tools declared by their node and allowed by the active profile.

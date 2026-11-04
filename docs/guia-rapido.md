@@ -198,3 +198,7 @@ sessão; não apague o lock nem inicie outro serviço. O painel também interrom
 a criação do run quando o diagnóstico falha. Se `flow_select`
 pedir confirmação, escolha o flow antes de criar o run. Se a auditoria mostrar
 evidência faltando, confira os checkpoints em `flow_inspect`.
+
+## Ferramentas por perfil
+
+Configure opcionalmente `policy` em cada fonte, conforme os dois exemplos genéricos no README. Em `skills` e `mcps`, `*` aceita qualquer sequência e `!` no início nega com prioridade. Lista omitida mantém a compatibilidade; lista vazia nega tudo. Liste no YAML de cada nó as Skills e os MCPs lógicos necessários, inclusive dependências de Skills. `mcpRegistrations` mapeia nomes para `codex` e `claude`; tanto o nome lógico quanto o registro precisam passar pela política. Regras por nome não comprovam propriedade nem bloqueiam chamadas externas. Agentes devem usar apenas ferramentas declaradas no nó e permitidas pelo perfil ativo.

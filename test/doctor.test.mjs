@@ -69,36 +69,33 @@ test("doctor checks both runtimes and skills when a source allows Codex fallback
   assert.deepEqual(result.checks.find((item) => item.name === "modelAccess").declared, ["anthropic/claude-test", "openai/gpt-6.1-sol"]);
 });
 
-test("doctor reports missing Design System MCP for Codex fallback", async () => {
+test("doctor checks declared registrations for each runtime and ignores unused aliases", async () => {
   const source = sourceService();
-  source.resolve = async () => ({ runtime: "claude", flowDefinition: { nodes: [{ id: "verify", model: "anthropic/claude-test", skills: ["prv-ds-compliance"] }] },
-    fallbackExecutions: { verify: { runtime: "codex", model: "openai/gpt-6.1-sol", effort: "medium" } } });
-  const result = await diagnoseFlowSetup({ stateDir: "/unused", sourceConfig: "/unused", homeDir: "/home/test",
-    sourceService: source, client: { list: async () => ({ items: [{ id: "sample" }] }) },
-    runCommand: async (command, args) => args[2] === "pravaler-ds"
-      ? { stdout: JSON.stringify({ enabled: false, transport: { type: "streamable_http" } }) }
-      : command === "claude" ? { stdout: "flow-server:\n  Status: ✔ Connected\n  Type: stdio\n  Command: /bin/flow-mcp\n" }
-        : { stdout: JSON.stringify({ enabled: true, transport: { type: "stdio", command: "flow-mcp", args: [] } }) },
-    fileAccess: async () => {}
-  });
+  source.sources[0].policy = { mcpRegistrations: { tools: { claude: "tools-c", codex: "tools-x" }, unused: { codex: "unused" } } };
+  source.resolve = async () => ({ runtime: "claude", flowDefinition: { id: "sample", nodes: [{ id: "verify", mcps: ["tools"] }] },
+    fallbackExecutions: { verify: { runtime: "codex", model: "openai/test", effort: "medium" } } });
+  const commands = [];
+  const result = await diagnoseFlowSetup({ sourceService: source, client: { list: async () => ({ items: [{ id: "sample" }] }) },
+    runCommand: async (command, args) => { commands.push([command, args[2]]); return command === "claude" ? { stdout: "Status: Connected\nType: stdio\nCommand: flow-mcp" } : { stdout: JSON.stringify({ enabled: args[2] !== "tools-x", transport: { type: "stdio", command: "flow-mcp" } }) }; }, fileAccess: async () => {} });
   assert.equal(result.status, "not_ready");
-  assert.equal(result.checks.find((item) => item.name === "codexDesignSystemMcpRegistration").status, "failed");
+  assert.equal(result.checks.find((item) => item.name === "mcp:personal:sample:verify:codex:tools-x").status, "failed");
+  assert.ok(commands.some(([runtime, name]) => runtime === "claude" && name === "tools-c"));
+  assert.ok(!commands.some(([, name]) => name === "unused"));
 });
 
-test("doctor reports unreachable Design System MCP DNS for Codex fallback", async () => {
-  const source = sourceService();
-  source.resolve = async () => ({ runtime: "claude", flowDefinition: { nodes: [{ id: "verify", model: "anthropic/claude-test", skills: ["prv-ds-compliance"] }] },
-    fallbackExecutions: { verify: { runtime: "codex", model: "openai/gpt-6.1-sol", effort: "medium" } } });
-  const result = await diagnoseFlowSetup({ stateDir: "/unused", sourceConfig: "/unused", homeDir: "/home/test",
-    sourceService: source, client: { list: async () => ({ items: [{ id: "sample" }] }) },
-    runCommand: async (command, args) => args[2] === "pravaler-ds"
-      ? { stdout: JSON.stringify({ enabled: true, transport: { type: "streamable_http", url: "https://example.test/ds" } }) }
-      : command === "claude" ? { stdout: "flow-server:\n  Status: ✔ Connected\n  Type: stdio\n  Command: /bin/flow-mcp\n" }
-        : { stdout: JSON.stringify({ enabled: true, transport: { type: "stdio", command: "flow-mcp", args: [] } }) },
-    fileAccess: async () => {}, resolveHost: async () => { throw Object.assign(new Error("DNS unavailable"), { code: "ENOTFOUND" }); }
-  });
+test("doctor requires a profile when a flow ID exists in multiple profiles", async () => {
+  const sources = sourceService();
+  sources.sources.push({ id: "second", mode: "local" });
+  sources.catalog.listEntries = async () => ["personal", "second"].map((sourceId) => ({ sourceId,
+    flow: { id: "shared", nodes: [{ id: "verify", mcps: [sourceId] }] } }));
+  const commands = [];
+  const result = await diagnoseFlowSetup({ flowId: "shared", sourceService: sources,
+    client: { list: async () => ({ items: [{ id: "shared" }] }) },
+    runCommand: async (...args) => { commands.push(args); return { stdout: JSON.stringify({ enabled: true, transport: { type: "stdio", command: "flow-mcp" } }) }; },
+    fileAccess: async () => {} });
   assert.equal(result.status, "not_ready");
-  assert.equal(result.checks.find((item) => item.name === "codexDesignSystemMcpDns").reason, "ENOTFOUND");
+  assert.match(result.checks.find((item) => item.name === "source").reason, /specify --profile/);
+  assert.ok(!result.checks.some((item) => item.name.startsWith("mcp:")));
 });
 
 test("doctor rejects a healthy service with no loaded flows", async () => {

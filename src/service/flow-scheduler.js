@@ -132,6 +132,8 @@ export function planFlowNext(flow, run, receiptList) {
     variant: node.variant,
     executor: node.executor,
     skills: node.skills ?? [],
+    mcps: node.mcps ?? [],
+    toolGuidance: "Use only the Skills and MCPs declared by this node and allowed by the active profile.",
     constraints: node.constraints ?? [],
     prompt: renderPrompt(node.prompt ?? node.input ?? node.output, run, receipts, flow),
     output: node.output,

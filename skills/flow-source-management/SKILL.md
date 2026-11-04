@@ -89,3 +89,5 @@ for confirmation before pull.
 For rollback, show the target local backup or Git commit and the affected flow
 diff first. Do not rewrite shared history. An active run keeps its recorded flow
 hash and Git commit; never replace its selected definition.
+
+For a guided node, use only its declared Skills and MCPs allowed by the active profile. A Skill's MCP dependencies must be declared on the node. Source `policy` is optional; `*` matches any sequence and leading `!` denies with priority. An omitted list preserves compatibility and an empty list denies that tool type. Both logical MCP names and runtime registrations must pass the policy. Name matching does not establish ownership or control calls outside flow-server. See README for generic source and node examples.

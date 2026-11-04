@@ -3,6 +3,7 @@ import { execFile as execFileCallback } from "node:child_process";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { FlowCatalog } from "../core/flow-catalog.js";
+import { validateFlowToolPolicy } from "../core/flow-tool-policy.js";
 import { FlowError } from "../core/errors.js";
 import { loadFlowSourceConfig } from "../core/flow-source-config.js";
 
@@ -78,7 +79,7 @@ export class FlowSourceService {
     }
     this.sources = sources;
     this.catalog = this.createCatalog(sources);
-    await this.catalog.listEntries();
+    for (const entry of await this.catalog.listEntries()) validateFlowToolPolicy(sources.find((source) => source.id === entry.sourceId), entry.flow);
     return this.status();
   }
 
@@ -131,10 +132,12 @@ export class FlowSourceService {
       ? flowIdOrSelection
       : { ...options, flowId: flowIdOrSelection };
     const { flowId, profileId, workspace, runtime } = selection;
+    if (this.configPath) await this.initialize();
     const selected = await this.selectFlow({ flowId, profileId, workspace });
     if (selected.decision !== "ready") throw new FlowError("FLOW_SELECTION_REQUIRED", "Workspace profile is unknown. Confirm the correct local profile before starting a run.");
     const entry = (await this.catalog.listEntries()).find((item) => item.flow.id === selected.flowId && item.sourceId === selected.profileId);
     const source = this.sources.find((item) => item.id === entry.sourceId);
+    validateFlowToolPolicy(source, entry.flow, runtime);
     const execution = source?.execution;
     if (runtime && execution?.runtime && runtime !== execution.runtime) throw new FlowError("RUNTIME_PROFILE_MISMATCH", "The requested runtime differs from this machine's configured runtime.");
     const selectedRuntime = execution?.runtime ?? runtime;

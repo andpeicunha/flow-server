@@ -28,7 +28,7 @@ export const tools = Object.freeze([
       properties: { flowId: identifier, profileId: identifier, workspace: { type: "string", minLength: 1, maxLength: 4096 }, runtime: { enum: ["codex", "claude"] }, task: { type: "string", maxLength: 65536 } }
     }
   },
-  { name: "flow_next", description: "Return ready nodes after recording each node runtime and model choice in the run. Honor dependencies, conditions, and stop rules. Run the node using the returned agent, runtime, model, effort, executor, Skills, constraints, and prompt.", inputSchema: { type: "object", additionalProperties: false, required: ["runId"], properties: { runId } } },
+  { name: "flow_next", description: "Return ready nodes after recording each node runtime and model choice in the run. Honor dependencies, conditions, and stop rules. Run the node using the returned agent, runtime, model, effort, executor, declared Skills and MCPs, constraints, and prompt. Use only the declared tools allowed by the active profile.", inputSchema: { type: "object", additionalProperties: false, required: ["runId"], properties: { runId } } },
   { name: "flow_lifecycle", description: "Pause, resume, stop, or fail a local guided run. Completion is set automatically when all required nodes finish.", inputSchema: { type: "object", additionalProperties: false, required: ["runId", "action"], properties: { runId, action: { enum: ["pause", "resume", "stop", "fail"] } } } },
   {
     name: "flow_checkpoint",
