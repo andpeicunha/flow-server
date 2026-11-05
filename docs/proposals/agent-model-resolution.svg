@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1120" viewBox="0 0 1600 1120" role="img" aria-labelledby="title desc">
+  <title id="title">Proposta: resolução de modelos por agente</title>
+  <desc id="desc">Exemplo prático: o nó pede o agente builder com esforço medium; o perfil autoriza model-a e depois model-b como fallback; o catálogo não tem model-a, então o sistema fixa model-b, executa o nó e registra o modelo usado no recibo.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M1,1 L11,6 L1,11 z" fill="#64748b"/></marker>
+    <marker id="greenArrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M1,1 L11,6 L1,11 z" fill="#16845b"/></marker>
+    <marker id="redArrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M1,1 L11,6 L1,11 z" fill="#c2413b"/></marker>
+    <filter id="shadow" x="-15%" y="-15%" width="130%" height="140%"><feDropShadow dx="0" dy="5" stdDeviation="8" flood-color="#13233a" flood-opacity=".10"/></filter>
+    <style>
+      text{font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;fill:#172b4d}
+      .title{font-size:36px;font-weight:750;letter-spacing:-.6px}.subtitle{font-size:18px;fill:#52647c}
+      .head{font-size:21px;font-weight:700}.body{font-size:16px;fill:#40536b}.small{font-size:14px;fill:#52647c}
+      .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:15px}
+      .box{filter:url(#shadow);stroke-width:2}.arrow{fill:none;stroke:#64748b;stroke-width:3;marker-end:url(#arrow)}
+    </style>
+  </defs>
+  <rect width="1600" height="1120" fill="#f4f7fb"/>
+  <text x="800" y="62" text-anchor="middle" class="title">Proposta: como resolver o modelo de cada nó</text>
+  <text x="800" y="96" text-anchor="middle" class="subtitle">Exemplo fictício: o nó pede “builder”; o perfil escolhe um modelo permitido e disponível.</text>
+
+  <!-- Inputs -->
+  <rect x="60" y="145" width="450" height="230" rx="20" fill="#fff" stroke="#8bb7ef" class="box"/>
+  <rect x="60" y="145" width="450" height="10" rx="5" fill="#4386df"/>
+  <circle cx="98" cy="190" r="18" fill="#e7f0ff"/><text x="98" y="196" text-anchor="middle" font-size="18" font-weight="700" fill="#2865b0">1</text>
+  <text x="130" y="197" class="head">Flow: papel e esforço</text>
+  <text x="90" y="240" class="body">O nó descreve a necessidade, sem escolher modelo.</text>
+  <rect x="90" y="264" width="390" height="78" rx="10" fill="#f1f6ff"/>
+  <text x="108" y="293" class="mono" fill="#254c80">agent: builder</text>
+  <text x="108" y="321" class="mono" fill="#254c80">effort: medium</text>
+
+  <rect x="575" y="145" width="500" height="230" rx="20" fill="#fff" stroke="#b59ae8" class="box"/>
+  <rect x="575" y="145" width="500" height="10" rx="5" fill="#8964cb"/>
+  <circle cx="613" cy="190" r="18" fill="#f0eaff"/><text x="613" y="196" text-anchor="middle" font-size="18" font-weight="700" fill="#6944ad">2</text>
+  <text x="645" y="197" class="head">Perfil: política do agente</text>
+  <text x="605" y="240" class="body">Autoriza uma preferência e fallbacks nesta ordem.</text>
+  <rect x="605" y="259" width="440" height="91" rx="10" fill="#f6f2ff"/>
+  <text x="623" y="285" class="mono" fill="#593d91">principal: provider/model-a</text>
+  <text x="623" y="311" class="mono" fill="#593d91">fallbacks: provider/model-b,</text>
+  <text x="711" y="334" class="mono" fill="#593d91">provider/model-c</text>
+
+  <rect x="1140" y="145" width="400" height="230" rx="20" fill="#fff" stroke="#f0c36d" class="box"/>
+  <rect x="1140" y="145" width="400" height="10" rx="5" fill="#d99b25"/>
+  <circle cx="1178" cy="190" r="18" fill="#fff4d9"/><text x="1178" y="196" text-anchor="middle" font-size="18" font-weight="700" fill="#9c6b10">3</text>
+  <text x="1210" y="197" class="head">Executor: catálogo</text>
+  <text x="1170" y="240" class="body">Informa o que está disponível agora.</text>
+  <rect x="1170" y="264" width="340" height="78" rx="10" fill="#fff8e9"/>
+  <text x="1188" y="293" class="mono" fill="#805b17">model-a: indisponível</text>
+  <text x="1188" y="321" class="mono" fill="#805b17">model-b ✓ medium   model-c ✓ medium</text>
+
+  <!-- Flow into resolver -->
+  <path d="M285 375 V425 H610" class="arrow"/>
+  <path d="M825 375 V412" class="arrow"/>
+  <path d="M1340 375 V425 H990" class="arrow"/>
+
+  <rect x="390" y="412" width="820" height="135" rx="22" fill="#eaf2ff" stroke="#5d8fd3" stroke-width="2.5" class="box"/>
+  <circle cx="438" cy="455" r="18" fill="#d8e8ff"/><text x="438" y="461" text-anchor="middle" font-size="18" font-weight="700" fill="#2865b0">4</text>
+  <text x="471" y="462" class="head">Resolver do flow-server</text>
+  <text x="800" y="499" text-anchor="middle" class="body">Cruza agente + esforço + política + catálogo</text>
+  <text x="800" y="526" text-anchor="middle" class="small">Exemplo: pula model-a e seleciona o primeiro fallback disponível: model-b</text>
+
+  <path d="M800 547 V581" class="arrow"/>
+  <path d="M800 581 L930 650 L800 719 L670 650 Z" fill="#fff" stroke="#8494aa" stroke-width="2.5" class="box"/>
+  <text x="800" y="645" text-anchor="middle" class="head" font-size="19">Há uma opção</text>
+  <text x="800" y="671" text-anchor="middle" class="body">autorizada e disponível?</text>
+
+  <!-- Yes path -->
+  <path d="M930 650 H1110 V762" fill="none" stroke="#16845b" stroke-width="3" marker-end="url(#greenArrow)"/>
+  <rect x="962" y="622" width="70" height="28" rx="14" fill="#e3f5ec"/><text x="997" y="642" text-anchor="middle" font-size="14" font-weight="700" fill="#16845b">SIM</text>
+  <!-- No path -->
+  <path d="M670 650 H490 V762" fill="none" stroke="#c2413b" stroke-width="3" marker-end="url(#redArrow)"/>
+  <rect x="548" y="622" width="70" height="28" rx="14" fill="#fff0ee"/><text x="583" y="642" text-anchor="middle" font-size="14" font-weight="700" fill="#b53732">NÃO</text>
+
+  <rect x="280" y="762" width="420" height="112" rx="18" fill="#fff5f3" stroke="#e5a09a" stroke-width="2" class="box"/>
+  <text x="490" y="800" text-anchor="middle" class="head" fill="#a6322e">Bloqueia antes do nó</text>
+  <text x="490" y="830" text-anchor="middle" class="body">Informa o modelo pedido, opções disponíveis</text>
+  <text x="490" y="854" text-anchor="middle" class="body">e por que nenhuma pode ser usada.</text>
+
+  <rect x="790" y="762" width="640" height="112" rx="18" fill="#effaf4" stroke="#8cc9a7" stroke-width="2" class="box"/>
+  <text x="1110" y="800" text-anchor="middle" class="head" fill="#176b4b">Fixa model-b no run e executa o nó</text>
+  <text x="1110" y="830" text-anchor="middle" class="body">O agente recebe builder + model-b + esforço compatível.</text>
+  <text x="1110" y="854" text-anchor="middle" class="body">O recibo informa o modelo que foi realmente usado.</text>
+
+  <!-- Practical receipt -->
+  <rect x="280" y="915" width="1150" height="150" rx="18" fill="#fff" stroke="#cbd5e1" stroke-width="2" class="box"/>
+  <text x="315" y="953" class="head">Exemplo de recibo</text>
+  <text x="315" y="985" class="small">O modelo pedido e o modelo usado ficam distintos para preservar o histórico correto.</text>
+  <rect x="315" y="1001" width="1080" height="43" rx="8" fill="#f4f7fb"/>
+  <text x="335" y="1029" class="mono" fill="#31445e">preferredModel: provider/model-a   ·   model: provider/model-b   ·   effort: medium   ·   resolution: fallback-1</text>
+
+  <text x="800" y="1092" text-anchor="middle" class="small">Nomes de agentes e modelos são exemplos fictícios. Este desenho descreve uma proposta, não um comportamento já implementado.</text>
+</svg>
