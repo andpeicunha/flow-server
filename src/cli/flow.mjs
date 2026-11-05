@@ -15,22 +15,20 @@ function help() {
   flow retry-inspect <run-id> <node-id>
   flow next <run-id>
   flow block <run-id> <node-id> --reason "..." [--rate-limit]
-  flow switch-runtime <run-id> <node-id> --reason "..." --workspace <path> --worktree-review "..." --reviewed-predecessors
+  flow switch-runtime <run-id> <node-id> --execution-profile <id> --reason "..." --workspace <path> --worktree-review "..." --reviewed-predecessors
   flow continue <run-id> --reason "..." [--workspace <path> --worktree-review "..." --reviewed-predecessors]
 
 Rate-limit recovery:
   1. If not already blocked, record a real provider limit with flow block --rate-limit.
   2. Confirm status, RATE_LIMIT reason, and pending node with flow inspect.
-  3. Run flow retry-inspect for that node. Check fallbackExecution,
+  3. Run flow retry-inspect for that node. Check availableExecutionProfiles,
      selectedExecution, every predecessor receipt, otherFailures, retryPending,
      and the actual pinned worktree for partial changes.
-  4. Switch only when fallbackExecution exists for this node, uses another
-     runtime, all predecessors are completed or skipped, no other failures or
-     retry are pending, and the worktree is safe. Use flow switch-runtime;
-     record the returned runtime, model, effort, and attempt in the checkpoint.
-  5. Without fallbackExecution, do not switch or start a replacement run.
-     Continue the same run only after primary provider access is restored;
-     otherwise leave it blocked and report that it cannot resume yet.
+  4. When another execution profile is available, select it with
+     --execution-profile. The switch applies to this and all remaining nodes.
+     Otherwise use a configured fallbackExecution when available.
+  5. If neither option exists, do not switch or start a replacement run.
+     Continue the same run only after primary provider access is restored.
 
 These commands use the local flow service. Mutations follow the same service
 checks as MCP operations.`;
@@ -55,7 +53,7 @@ function parse(argumentsList) {
     values[item] = value;
     index += 1;
   }
-  const allowed = new Set(["--state-dir", "--flow", "--profile", "--task", "--workspace", "--runtime", "--mode", "--receipt", "--approve-host-adapter", "--last", "--since", "--content-hash", "--compare-versions", "--node", "--reason", "--worktree-review", "--rate-limit", "--reviewed-predecessors"]);
+  const allowed = new Set(["--state-dir", "--flow", "--profile", "--execution-profile", "--task", "--workspace", "--runtime", "--mode", "--receipt", "--approve-host-adapter", "--last", "--since", "--content-hash", "--compare-versions", "--node", "--reason", "--worktree-review", "--rate-limit", "--reviewed-predecessors"]);
   const unexpected = Object.keys(values).find((key) => !allowed.has(key));
   if (unexpected) throw new Error(`Unsupported option: ${unexpected}`);
   return { positional, values };
@@ -133,6 +131,7 @@ async function main() {
     const nodeId = requireOption({ nodeId: positional[1] ?? values["--node"] }, "nodeId");
     const body = {
       nodeId,
+      ...(values["--execution-profile"] ? { executionProfileId: values["--execution-profile"] } : {}),
       reason: requireOption(values, "--reason"),
       workspace: requireOption(values, "--workspace"),
       worktreeReview: requireOption(values, "--worktree-review"),
@@ -202,7 +201,7 @@ async function main() {
       process.exitCode = 2;
       return;
     }
-    const body = { flowId: selection.flowId, profileId: selection.profileId, workspace, ...(runtime ? { runtime } : {}), executionMode: mode, ...(values["--task"] ? { task: values["--task"] } : {}) };
+    const body = { flowId: selection.flowId, profileId: selection.profileId, workspace, ...(runtime ? { runtime } : {}), ...(values["--execution-profile"] ? { executionProfileId: values["--execution-profile"] } : {}), executionMode: mode, ...(values["--task"] ? { task: values["--task"] } : {}) };
     return console.log(JSON.stringify(await request(client, "/v1/runs", { method: "POST", body, mutate: true })));
   }
   const receiptPath = requireOption(values, "--receipt");

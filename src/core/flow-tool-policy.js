@@ -31,7 +31,8 @@ function allowed(rules, name) {
 
 export function validateFlowToolPolicy(source, flow, runtime) {
   const policy = source.policy;
-  const runtimes = [...new Set([source.execution?.runtime ?? runtime ?? "codex", source.execution?.fallback?.runtime].filter(Boolean))];
+  const runtimes = [...new Set([source.execution?.runtime, ...(source.execution?.profiles ?? []).map(({ runtime: value }) => value), runtime, source.execution?.fallback?.runtime].filter(Boolean))];
+  if (!runtimes.length) runtimes.push("codex");
   for (const node of flow.nodes) {
     const check = (type, name, runtimeName) => {
       if (!allowed(policy?.[type], name)) throw new FlowError("FLOW_TOOL_POLICY_DENIED", `Profile ${source.id}, flow ${flow.id}, node ${node.id}: ${type} tool ${name} denied${runtimeName ? ` for runtime ${runtimeName}` : ""}.`);

@@ -33,9 +33,27 @@
             }
           },
           "execution": {
-            "type": "object", "additionalProperties": false, "required": ["runtime"],
+            "type": "object", "additionalProperties": false,
+            "anyOf": [
+              { "required": ["runtime"], "properties": { "runtime": { "enum": ["codex", "claude"] } } },
+              { "required": ["profiles"], "properties": { "profiles": { "type": "array" } } }
+            ],
             "properties": {
               "runtime": { "enum": ["codex", "claude"] },
+              "defaultProfileId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$" },
+              "profiles": {
+                "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true,
+                "items": {
+                  "type": "object", "additionalProperties": false, "required": ["id", "name", "runtime"],
+                  "properties": {
+                    "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$" },
+                    "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+                    "runtime": { "enum": ["codex", "claude"] },
+                    "models": { "type": "object", "maxProperties": 64, "propertyNames": { "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$" }, "additionalProperties": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$" } },
+                    "efforts": { "type": "object", "propertyNames": { "enum": ["low", "medium", "high", "xhigh", "max", "ultra"] }, "additionalProperties": { "enum": ["low", "medium", "high", "xhigh", "max", "ultra"] } }
+                  }
+                }
+              },
               "models": { "type": "object", "maxProperties": 64, "propertyNames": { "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$" }, "additionalProperties": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$" } },
               "efforts": { "type": "object", "propertyNames": { "enum": ["low", "medium", "high", "xhigh", "max", "ultra"] }, "additionalProperties": { "enum": ["low", "medium", "high", "xhigh", "max", "ultra"] } },
               "fallback": {

@@ -31,11 +31,12 @@ async function readJson(request) {
 
 function validateCreate(body) {
   const valid = body && typeof body === "object" && !Array.isArray(body)
-    && Object.keys(body).every((key) => ["flowId", "profileId", "workspace", "runtime", "executionMode", "task"].includes(key))
+    && Object.keys(body).every((key) => ["flowId", "profileId", "workspace", "runtime", "executionProfileId", "executionMode", "task"].includes(key))
     && typeof body.flowId === "string" && /^[a-z][a-z0-9-]{0,62}$/.test(body.flowId)
     && (body.profileId === undefined || (typeof body.profileId === "string" && /^[a-z][a-z0-9-]{0,62}$/.test(body.profileId)))
     && typeof body.workspace === "string" && body.workspace.length > 0 && body.workspace.length <= 4096
     && (body.runtime === undefined || ["codex", "claude"].includes(body.runtime)) && ["guided", "direct"].includes(body.executionMode)
+    && (body.executionProfileId === undefined || (typeof body.executionProfileId === "string" && /^[a-z][a-z0-9-]{0,62}$/.test(body.executionProfileId)))
     && (body.task === undefined || (typeof body.task === "string" && body.task.length <= 64 * 1024));
   if (!valid) throw new FlowError("INVALID_RUN_REQUEST", "flowId, workspace, and executionMode are required; runtime must be configured or supplied.");
 }

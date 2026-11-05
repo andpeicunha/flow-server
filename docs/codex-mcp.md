@@ -37,12 +37,18 @@ mapping and route can be trusted automatically; if selection is ambiguous, ask
 the developer and do not start a run yet.
 
 For Claude, register the same `flow-mcp` command with `claude mcp add flow-server -- flow-mcp`.
-The local source can set `execution.runtime: "claude"`; the doctor then checks
-Claude's MCP registration and Skills instead of Codex's.
+Legacy sources can set `execution.runtime: "claude"`. With execution profiles,
+`doctor` checks the MCP registration and Skills for configured execution
+profiles and legacy runtime/fallback settings. It does not verify model
+availability, account access, or whether the current
+agent session has loaded the MCP tools.
 
-Use `flow_list` to inspect flows in a profile, `flow_start_guided` to create a
-selected run. Pass the original task so it appears in node prompts. `flow_next`
-starts the run and returns ready nodes with their configured agent,
+Use `flow_list` to inspect flows in a source profile. `flow_select` may also
+return `executionProfiles` and `defaultExecutionProfileId`. When profiles are
+listed, choose the intended one (or use the declared default) and pass its ID as
+`executionProfileId` to `flow_start_guided`. The Herdr pane asks for this choice
+when starting a run. Pass the original task so it appears in node prompts.
+`flow_next` starts the run and returns ready nodes with their configured agent,
 model, effort, executor, Skills, constraints, and prompt. Record node outputs
 with `flow_checkpoint` so conditions and stop rules can be evaluated. For a
 completed node with a configured model, the checkpoint must record the matching
@@ -65,25 +71,25 @@ only after reviewing every predecessor. The service archives the
 old receipt and returns only that node with its new `attempt` number. A paused run
 requires `flow_lifecycle` with `resume` first. Terminal runs cannot continue.
 
-A source may configure a fallback runtime for new runs. `flow_next` pins each
-ready node's runtime, model, effort, and attempt. For a real provider limit,
-call `flow_block` with `reasonCode: "RATE_LIMIT"` only if the run is not already
-blocked. For an existing block, use `flow_inspect` to confirm its status,
-reason, and node, then `flow_retry_inspect` on that node. Check `runStatus`,
-`selectedExecution`, `fallbackExecution`, all predecessor receipts,
-`otherFailures`, and `retryPending`; also review partial work in the pinned
-worktree. Switch only if the run is blocked for this `RATE_LIMIT`, the pinned
-fallback exists and uses another runtime, all predecessors are completed or
-skipped, there are no other failures or pending retries, and the worktree is
-safe. Then call `flow_switch_runtime` with the pinned workspace, reason, review,
-and `reviewedPredecessors: true`. Use its returned runtime, model, effort, and
-attempt for the next checkpoint.
+A source may define reusable execution profiles for new runs. Each run pins
+its selected profile, runtime, model mappings, and resolved node settings. After a
+real provider limit, use `flow_inspect` and `flow_retry_inspect` to confirm the
+blocked node and inspect `selectedExecution`, `availableExecutionProfiles`,
+predecessor receipts, `otherFailures`, `retryPending`, and the actual pinned
+worktree. If another execution profile is available and every check passes, call
+`flow_switch_runtime` with its `executionProfileId`, the pinned workspace, a
+reason, a factual `worktreeReview`, and `reviewedPredecessors: true`. This
+switches the blocked node and later nodes that do not yet have a receipt;
+completed receipts remain unchanged. Use the returned runtime, model, effort,
+and attempt in the next checkpoint.
 
-If `fallbackExecution` is absent, do not switch runtimes: this run cannot gain a
-fallback after it starts. Keep it blocked until the primary provider access is
-restored; only then use `flow_continue` on the same run. If access is still
-limited, leave the run intact and report that it cannot resume yet. Do not
-start a replacement run without the developer's direction.
+Execution profiles select runtime and model IDs; they do not select or change
+provider credentials. The active agent session must already be authenticated
+for the selected runtime. Legacy `fallbackExecution` remains supported for
+existing runs and switches only the blocked node. If there is no alternate
+profile or legacy fallback, continue the same run only after primary provider
+access is restored. Otherwise leave it blocked. Do not start a replacement run
+automatically.
 `flow_retry_node` remains available for older clients but is no longer the
 normal path for guided runs.
 Use `flow_inspect` and `flow_audit` for run review. Audit reports `passed` only

@@ -15,6 +15,8 @@
     "flowGitCommit": { "type": "string", "pattern": "^[a-f0-9]{40,64}$" },
     "task": { "type": "string", "maxLength": 65536 },
     "runtime": { "enum": ["codex", "claude"] },
+    "executionProfileId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$" },
+    "availableExecutionProfiles": { "type": "array", "maxItems": 16, "items": { "type": "object", "additionalProperties": false, "required": ["id", "name", "runtime"], "properties": { "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$" }, "name": { "type": "string", "minLength": 1, "maxLength": 80 }, "runtime": { "enum": ["codex", "claude"] } } } },
     "executionMode": { "enum": ["guided", "direct"] },
     "status": { "enum": ["created", "running", "paused", "blocked", "stopped", "completed", "failed"] },
     "createdAt": { "type": "string", "format": "date-time" },

@@ -124,39 +124,54 @@ export class FlowSourceService {
   selection(entry, profileId, reason) {
     const source = this.sources.find((item) => item.id === entry.sourceId);
     return { decision: "ready", reason, profileId, flowId: entry.flow.id, flowSourceId: entry.sourceId, flowContentHash: entry.contentHash,
-      ...(source?.execution?.runtime ? { runtime: source.execution.runtime } : {}) };
+      ...(source?.execution?.runtime && !source.execution.profiles ? { runtime: source.execution.runtime } : {}),
+      ...(source?.execution?.profiles ? { executionProfiles: source.execution.profiles.map(({ id, name, runtime }) => ({ id, name, runtime })), ...(source.execution.defaultProfileId ? { defaultExecutionProfileId: source.execution.defaultProfileId } : {}) } : {}) };
   }
 
   async resolve(flowIdOrSelection, options = {}) {
     const selection = typeof flowIdOrSelection === "object" && flowIdOrSelection !== null
       ? flowIdOrSelection
       : { ...options, flowId: flowIdOrSelection };
-    const { flowId, profileId, workspace, runtime } = selection;
+    const { flowId, profileId, workspace, runtime, executionProfileId } = selection;
     if (this.configPath) await this.initialize();
     const selected = await this.selectFlow({ flowId, profileId, workspace });
     if (selected.decision !== "ready") throw new FlowError("FLOW_SELECTION_REQUIRED", "Workspace profile is unknown. Confirm the correct local profile before starting a run.");
     const entry = (await this.catalog.listEntries()).find((item) => item.flow.id === selected.flowId && item.sourceId === selected.profileId);
     const source = this.sources.find((item) => item.id === entry.sourceId);
-    validateFlowToolPolicy(source, entry.flow, runtime);
     const execution = source?.execution;
-    if (runtime && execution?.runtime && runtime !== execution.runtime) throw new FlowError("RUNTIME_PROFILE_MISMATCH", "The requested runtime differs from this machine's configured runtime.");
-    const selectedRuntime = execution?.runtime ?? runtime;
+    const profiles = execution?.profiles ?? [];
+    let executionProfile;
+    if (profiles.length) {
+      const requestedId = executionProfileId ?? execution.defaultProfileId ?? (profiles.length === 1 ? profiles[0].id : undefined);
+      if (!requestedId) throw new FlowError("EXECUTION_PROFILE_REQUIRED", `Choose an execution profile for source ${selected.profileId}.`);
+      executionProfile = profiles.find(({ id }) => id === requestedId);
+      if (!executionProfile) throw new FlowError("EXECUTION_PROFILE_NOT_FOUND", `Execution profile ${requestedId} is not configured for source ${selected.profileId}.`);
+      if (runtime && runtime !== executionProfile.runtime) throw new FlowError("RUNTIME_PROFILE_MISMATCH", "The requested runtime differs from the selected execution profile.");
+    } else if (executionProfileId) {
+      throw new FlowError("EXECUTION_PROFILE_NOT_FOUND", `Source ${selected.profileId} has no execution profiles.`);
+    }
+    if (!executionProfile && runtime && execution?.runtime && runtime !== execution.runtime) throw new FlowError("RUNTIME_PROFILE_MISMATCH", "The requested runtime differs from this machine's configured runtime.");
+    const selectedRuntime = executionProfile?.runtime ?? execution?.runtime ?? runtime;
+    validateFlowToolPolicy(source, entry.flow, selectedRuntime);
     const flowDefinition = structuredClone(entry.flow);
     const fallbackExecutions = {};
-    if (execution) {
+    const mapper = executionProfile ?? execution;
+    if (mapper) {
       for (const node of flowDefinition.nodes) {
-        if (node.model && execution.models) {
-          if (!Object.hasOwn(execution.models, node.model)) throw new FlowError("NODE_MODEL_UNMAPPED", `Node ${node.id} has no model mapping for this machine.`);
-          node.model = execution.models[node.model];
+        if (node.model && mapper.models) {
+          if (!Object.hasOwn(mapper.models, node.model)) throw new FlowError("NODE_MODEL_UNMAPPED", `Node ${node.id} has no model mapping for this execution profile.`);
+          node.model = mapper.models[node.model];
         }
-        if (execution.runtime === "claude" && node.model?.startsWith("openai/")) throw new FlowError("NODE_MODEL_UNMAPPED", `Node ${node.id} still names an OpenAI model for Claude.`);
+        if ((selectedRuntime === "claude" && node.model?.startsWith("openai/")) || (selectedRuntime === "codex" && node.model?.startsWith("anthropic/"))) {
+          throw new FlowError("NODE_MODEL_UNMAPPED", `Node ${node.id} has a model incompatible with ${selectedRuntime}.`);
+        }
         const effort = node.effort ?? node.variant;
-        if (effort && execution.efforts && Object.hasOwn(execution.efforts, effort)) {
-          if (node.effort !== undefined) node.effort = execution.efforts[effort];
-          else node.variant = execution.efforts[effort];
+        if (effort && mapper.efforts && Object.hasOwn(mapper.efforts, effort)) {
+          if (node.effort !== undefined) node.effort = mapper.efforts[effort];
+          else node.variant = mapper.efforts[effort];
         }
         node.executor = selectedRuntime;
-        if (execution.fallback) {
+        if (!executionProfile && execution.fallback) {
           const fallback = execution.fallback;
           const override = Object.hasOwn(fallback.agents ?? {}, node.agent) ? fallback.agents[node.agent] : undefined;
           const fallbackModel = override?.model ?? fallback.models[node.model];
@@ -171,7 +186,8 @@ export class FlowSourceService {
     if (source && gitIdentity) Object.assign(source, { gitCommit: gitIdentity.commit, currentBranch: gitIdentity.branch });
     return { flowId: entry.flow.id, profileId: selected.profileId, flowSourceId: entry.sourceId, flowContentHash: entry.contentHash,
       ...(selectedRuntime ? { runtime: selectedRuntime } : {}), flowDefinition,
-      ...(execution?.fallback ? { fallbackExecutions } : {}), ...(gitIdentity?.commit ? { flowGitCommit: gitIdentity.commit } : {}) };
+      ...(executionProfile ? { executionProfileId: executionProfile.id, executionProfileSnapshot: structuredClone(executionProfile), availableExecutionProfiles: profiles.map(({ id, name, runtime }) => ({ id, name, runtime })) } : {}),
+      ...(!executionProfile && execution?.fallback ? { fallbackExecutions } : {}), ...(gitIdentity?.commit ? { flowGitCommit: gitIdentity.commit } : {}) };
   }
 
   async refreshGitIdentities() {
@@ -185,6 +201,6 @@ export class FlowSourceService {
 
   async status() {
     await this.refreshGitIdentities();
-    return this.sources.map(({ id, mode, path, remote, branch, currentBranch, gitCommit, sync, workspaceRoots, execution }) => ({ id, mode, path, ...(workspaceRoots.length ? { workspaceRoots } : {}), ...(remote ? { remote } : {}), ...(branch ? { branch } : {}), ...(currentBranch ? { currentBranch } : {}), ...(gitCommit ? { gitCommit } : {}), ...(execution ? { execution: { runtime: execution.runtime, modelOverrides: Object.keys(execution.models ?? {}).length } } : {}), sync }));
+    return this.sources.map(({ id, mode, path, remote, branch, currentBranch, gitCommit, sync, workspaceRoots, execution }) => ({ id, mode, path, ...(workspaceRoots.length ? { workspaceRoots } : {}), ...(remote ? { remote } : {}), ...(branch ? { branch } : {}), ...(currentBranch ? { currentBranch } : {}), ...(gitCommit ? { gitCommit } : {}), ...(execution ? { execution: { ...(execution.runtime ? { runtime: execution.runtime } : {}), modelOverrides: Object.keys(execution.models ?? {}).length, ...(execution.profiles ? { profiles: execution.profiles.map(({ id, name, runtime }) => ({ id, name, runtime })), ...(execution.defaultProfileId ? { defaultProfileId: execution.defaultProfileId } : {}) } : {}) } } : {}), sync }));
   }
 }

@@ -25,6 +25,25 @@ function validFallback(fallback, primaryRuntime) {
       (choice.effort === undefined || efforts.has(choice.effort))));
 }
 
+function validExecutionProfiles(profiles, defaultProfileId) {
+  if (profiles === undefined) return defaultProfileId === undefined;
+  if (!Array.isArray(profiles) || profiles.length < 1 || profiles.length > 16) return false;
+  const ids = new Set();
+  for (const profile of profiles) {
+    if (!profile || typeof profile !== "object" || Array.isArray(profile) ||
+      !exactKeys(profile, new Set(["id", "name", "runtime", "models", "efforts"])) ||
+      !identifier.test(profile.id) || ids.has(profile.id) || typeof profile.name !== "string" ||
+      !profile.name.trim() || profile.name.length > 80 || !["codex", "claude"].includes(profile.runtime)) return false;
+    ids.add(profile.id);
+    if (profile.models !== undefined && (!profile.models || typeof profile.models !== "object" || Array.isArray(profile.models) ||
+      Object.keys(profile.models).length > 64 ||
+      !Object.entries(profile.models).every(([from, to]) => modelId.test(from) && typeof to === "string" && modelId.test(to)))) return false;
+    if (profile.efforts !== undefined && (!profile.efforts || typeof profile.efforts !== "object" || Array.isArray(profile.efforts) ||
+      !Object.entries(profile.efforts).every(([from, to]) => efforts.has(from) && efforts.has(to)))) return false;
+  }
+  return defaultProfileId === undefined || (identifier.test(defaultProfileId) && ids.has(defaultProfileId));
+}
+
 export function resolveFlowSourceConfigPath({ explicit, env = process.env, homeDir = homedir() } = {}) {
   return explicit || env.FLOW_SOURCE_CONFIG || join(homeDir, ".config", "flow-server", "sources.json");
 }
@@ -44,9 +63,11 @@ export function validateFlowSourceConfig(value) {
     const allowed = new Set(["id", "mode", "path", "remote", "branch", "workspaceRoots", "sync", "execution", "policy"]);
     const execution = source?.execution;
     const validExecution = execution === undefined || (execution && typeof execution === "object" && !Array.isArray(execution)
-      && exactKeys(execution, new Set(["runtime", "models", "efforts", "fallback"]))
-      && ["codex", "claude"].includes(execution.runtime)
-      && validFallback(execution.fallback, execution.runtime)
+      && exactKeys(execution, new Set(["runtime", "models", "efforts", "fallback", "profiles", "defaultProfileId"]))
+      && (execution.runtime === undefined || ["codex", "claude"].includes(execution.runtime))
+      && (execution.runtime !== undefined || execution.profiles?.length)
+      && (execution.fallback === undefined || (execution.runtime && validFallback(execution.fallback, execution.runtime)))
+      && validExecutionProfiles(execution.profiles, execution.defaultProfileId)
       && (execution.models === undefined || (execution.models && typeof execution.models === "object" && !Array.isArray(execution.models)
         && Object.keys(execution.models).length <= 64
         && Object.entries(execution.models).every(([from, to]) => modelId.test(from) && typeof to === "string" && modelId.test(to))))

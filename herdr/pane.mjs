@@ -95,9 +95,17 @@ async function main() {
           continue;
         }
         checkSetup(selection.flowId, selection.profileId);
-        const runtime = await ask("Agent runtime (codex/claude)", selection.runtime || "codex");
-        if (!["codex", "claude"].includes(runtime)) throw new Error("Runtime must be codex or claude.");
-        const run = await client.startGuided({ flowId: selection.flowId, profileId: selection.profileId, workspace, runtime, task });
+        let executionProfileId;
+        let runtime;
+        if (selection.executionProfiles?.length) {
+          const choices = selection.executionProfiles.map(({ id, name, runtime: choiceRuntime }) => `${id} (${name}, ${choiceRuntime})`).join(", ");
+          executionProfileId = await ask(`Execution profile: ${choices}`, selection.defaultExecutionProfileId || "");
+          if (!selection.executionProfiles.some(({ id }) => id === executionProfileId)) throw new Error("Choose an available execution profile ID.");
+        } else {
+          runtime = await ask("Agent runtime (codex/claude)", selection.runtime || "codex");
+          if (!["codex", "claude"].includes(runtime)) throw new Error("Runtime must be codex or claude.");
+        }
+        const run = await client.startGuided({ flowId: selection.flowId, profileId: selection.profileId, executionProfileId, workspace, runtime, task });
         console.log(JSON.stringify(run, null, 2));
         console.log("Ask your agent to continue this run through the flow-server MCP.");
       } else if (command === "5") {

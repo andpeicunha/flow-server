@@ -4,7 +4,7 @@ import { transitionRun } from "../core/lifecycle.js";
 import { isRfc3339DateTime } from "../core/date-time.js";
 import { evaluateCondition, planFlowNext } from "./flow-scheduler.js";
 
-const publicRun = ({ workspace, flowDefinition, fallbackExecutions, retry, ...run }) => run;
+const publicRun = ({ workspace, flowDefinition, fallbackExecutions, executionProfileSnapshot, retry, ...run }) => run;
 
 function predecessorsOf(flow, nodeId) {
   const byId = new Map(flow.nodes.map((node) => [node.id, node]));
@@ -68,6 +68,8 @@ export class RunService {
     const predecessors = predecessorsOf(run.flowDefinition, nodeId);
     return {
       runId: id, nodeId, runStatus: run.status, workspace: run.workspace,
+      ...(run.executionProfileId ? { executionProfileId: run.executionProfileId } : {}),
+      ...(run.availableExecutionProfiles ? { availableExecutionProfiles: run.availableExecutionProfiles } : {}),
       ...(run.nodeExecutions?.[nodeId] ? { selectedExecution: run.nodeExecutions[nodeId] } : {}),
       ...(run.fallbackExecutions?.[nodeId] ? { fallbackExecution: run.fallbackExecutions[nodeId] } : {}),
       failedReceipt: receipts.find((item) => item.nodeId === nodeId),
@@ -119,8 +121,9 @@ export class RunService {
     return { runId: id, nodeId, attempt: run.retry.attempt, status: "ready_for_retry" };
   }
 
-  async create({ flowId, profileId, workspace, runtime, executionMode, task, flowSourceId, flowContentHash, flowGitCommit }) {
-    const resolved = this.flowResolver ? await this.flowResolver({ flowId, profileId, workspace, runtime }) : {};
+  async create({ flowId, profileId, workspace, runtime, executionProfileId, executionMode, task, flowSourceId, flowContentHash, flowGitCommit }) {
+    if (executionProfileId && !this.flowResolver) throw new FlowError("EXECUTION_PROFILE_UNAVAILABLE", "This service cannot resolve execution profiles.");
+    const resolved = this.flowResolver ? await this.flowResolver({ flowId, profileId, workspace, runtime, executionProfileId }) : {};
     const selectedRuntime = resolved.runtime ?? runtime;
     if (!["codex", "claude"].includes(selectedRuntime)) throw new FlowError("INVALID_RUN_REQUEST", "A configured or requested runtime is required.");
     const run = {
@@ -132,6 +135,8 @@ export class RunService {
       ...(resolved.flowContentHash || flowContentHash ? { flowContentHash: resolved.flowContentHash ?? flowContentHash } : {}),
       ...(resolved.flowGitCommit || flowGitCommit ? { flowGitCommit: resolved.flowGitCommit ?? flowGitCommit } : {}),
       ...(resolved.flowDefinition ? { flowDefinition: resolved.flowDefinition } : {}),
+      ...(resolved.executionProfileId ? { executionProfileId: resolved.executionProfileId, executionProfileSnapshot: resolved.executionProfileSnapshot,
+        availableExecutionProfiles: resolved.availableExecutionProfiles, nodeExecutions: {} } : {}),
       ...(resolved.fallbackExecutions ? { fallbackExecutions: resolved.fallbackExecutions, nodeExecutions: {} } : {}),
       ...(task !== undefined ? { task } : {}),
       workspace,
@@ -166,8 +171,9 @@ export class RunService {
 
   switchNode(id, review) { return this.lockRun(id, () => this.switchNodeUnlocked(id, review)); }
 
-  async switchNodeUnlocked(id, { nodeId, reason, workspace, worktreeReview, reviewedPredecessors } = {}) {
+  async switchNodeUnlocked(id, { nodeId, executionProfileId, reason, workspace, worktreeReview, reviewedPredecessors } = {}) {
     const run = await this.stateStore.readRun(id);
+    if (executionProfileId) return this.switchExecutionProfileUnlocked(run, { nodeId, executionProfileId, reason, workspace, worktreeReview, reviewedPredecessors });
     if (!run.fallbackExecutions?.[nodeId]) throw new FlowError("FALLBACK_NOT_CONFIGURED", "This run has no configured fallback for the node.");
     if (run.status !== "blocked" || run.block?.reason !== "RATE_LIMIT" || run.block.nodeId !== nodeId) {
       throw new FlowError("FALLBACK_NOT_BLOCKED", "Switch only the node blocked by a provider rate limit.");
@@ -201,13 +207,81 @@ export class RunService {
     return { ...publicRun(run), next: this.readyNodesWithAttempt(planned.nodes.filter((item) => item.id === nodeId), run) };
   }
 
+  async switchExecutionProfileUnlocked(run, { nodeId, executionProfileId, reason, workspace, worktreeReview, reviewedPredecessors }) {
+    if (run.status !== "blocked" || run.block?.reason !== "RATE_LIMIT" || run.block.nodeId !== nodeId) {
+      throw new FlowError("FALLBACK_NOT_BLOCKED", "Switch the execution profile only for the pending node blocked by a provider rate limit.");
+    }
+    if (run.retry) throw new FlowError("RETRY_ALREADY_PENDING", "Complete the pending retry before switching execution profiles.");
+    if (workspace !== run.workspace || typeof workspace !== "string") throw new FlowError("RETRY_WORKSPACE_MISMATCH", "Use the pinned workspace for this run.");
+    if (typeof reason !== "string" || !reason.trim() || reason.length > 2000 ||
+      typeof worktreeReview !== "string" || !worktreeReview.trim() || worktreeReview.length > 2000 || reviewedPredecessors !== true) {
+      throw new FlowError("CONTINUE_REVIEW_REQUIRED", "Review the pinned worktree and completed predecessors before switching execution profiles.");
+    }
+    if (!this.flowResolver) throw new FlowError("EXECUTION_PROFILE_UNAVAILABLE", "This service cannot resolve execution profiles.");
+    const resolved = await this.flowResolver({ flowId: run.flowId, profileId: run.profileId, workspace: run.workspace, executionProfileId });
+    if (resolved.flowContentHash && run.flowContentHash && resolved.flowContentHash !== run.flowContentHash) {
+      throw new FlowError("FLOW_CONTENT_CHANGED", "The flow source changed after this run started. The execution profile was not switched.");
+    }
+    if (resolved.flowSourceId && run.flowSourceId && resolved.flowSourceId !== run.flowSourceId) {
+      throw new FlowError("FLOW_SOURCE_MISMATCH", "The execution profile does not belong to this run's flow source.");
+    }
+    if (!resolved.executionProfileSnapshot || !resolved.flowDefinition?.nodes) {
+      throw new FlowError("EXECUTION_PROFILE_NOT_FOUND", "The requested execution profile could not be resolved for this run.");
+    }
+    if (executionProfileId === run.executionProfileId) throw new FlowError("EXECUTION_PROFILE_UNCHANGED", "Choose a different execution profile to switch this run.");
+    const receipts = await this.stateStore.listReceipts(run.id);
+    if (receipts.some((item) => item.status === "failed")) throw new FlowError("RETRY_PREDECESSOR_UNSAFE", "Resolve failed nodes before switching execution profiles.");
+    const predecessors = predecessorsOf(run.flowDefinition, nodeId);
+    if (predecessors.some((parent) => !["completed", "skipped"].includes(receipts.find((item) => item.nodeId === parent)?.status))) {
+      throw new FlowError("RETRY_PREDECESSOR_UNSAFE", "Review every completed predecessor before switching execution profiles.");
+    }
+    if (receipts.some((item) => item.nodeId === nodeId)) throw new FlowError("FALLBACK_RECEIPT_EXISTS", "The blocked node already has a receipt.");
+    const oldSelection = run.nodeExecutions?.[nodeId];
+    const node = run.flowDefinition.nodes.find((item) => item.id === nodeId);
+    if (!node || !oldSelection) throw new FlowError("FALLBACK_SELECTION_CHANGED", "Inspect the selected node execution before switching.");
+    const attempt = oldSelection.attempt ?? 1;
+    if (attempt > (node.retry ?? 3)) throw new FlowError("RETRY_LIMIT_REACHED", "This node has reached its configured retry limit.");
+
+    const previousProfile = run.executionProfileSnapshot;
+    run.flowDefinition = resolved.flowDefinition;
+    run.runtime = resolved.runtime;
+    run.executionProfileId = resolved.executionProfileId;
+    run.executionProfileSnapshot = resolved.executionProfileSnapshot;
+    run.availableExecutionProfiles = resolved.availableExecutionProfiles;
+    delete run.fallbackExecutions;
+    for (const pending of resolved.flowDefinition.nodes) {
+      if (receipts.some((item) => item.nodeId === pending.id)) continue;
+      run.nodeExecutions[pending.id] = {
+        runtime: resolved.runtime,
+        model: pending.model,
+        effort: pending.effort ?? pending.variant ?? "medium",
+        attempt: pending.id === nodeId ? attempt + 1 : 1,
+        selectedAt: this.now()
+      };
+    }
+    run.executionHistory = [...(run.executionHistory ?? []), {
+      nodeId,
+      from: { profile: previousProfile, profileId: previousProfile?.id ?? oldSelection.runtime, runtime: oldSelection.runtime, model: oldSelection.model },
+      to: { profile: resolved.executionProfileSnapshot, profileId: executionProfileId, runtime: resolved.runtime, model: run.nodeExecutions[nodeId].model },
+      reason: reason.trim(), worktreeReview, reviewedNodeIds: predecessors, recordedAt: this.now()
+    }];
+    run.blockHistory = [...(run.blockHistory ?? []), { ...run.block, resolution: reason.trim(), resolvedAt: this.now() }];
+    delete run.block;
+    run.status = transitionRun(run.status, "continue");
+    await this.stateStore.writeRun(run);
+    const planned = planFlowNext(run.flowDefinition, run, receipts);
+    return { ...publicRun(run), next: planned.status === "ready" ? this.readyNodesWithAttempt(planned.nodes, run) : [] };
+  }
+
   continueRun(id, resolution) { return this.lockRun(id, () => this.continueRunUnlocked(id, resolution)); }
 
   async continueRunUnlocked(id, { reason, workspace, worktreeReview, reviewedPredecessors } = {}) {
     const run = await this.stateStore.readRun(id);
     if (run.status !== "blocked" || !run.block) throw new FlowError("RUN_NOT_BLOCKED", "This run has no open block.");
     if (typeof reason !== "string" || !reason.trim() || reason.length > 2000) throw new FlowError("INVALID_RESOLUTION", "Describe what fixed the block before continuing.");
-    if (run.block.reason === "RATE_LIMIT" && run.fallbackExecutions?.[run.block.nodeId]) throw new FlowError("FALLBACK_SELECTION_REQUIRED", "Use flow_switch_runtime after reviewing the pinned worktree.");
+    if (run.block.reason === "RATE_LIMIT" && (run.fallbackExecutions?.[run.block.nodeId] || run.availableExecutionProfiles?.some(({ id }) => id !== run.executionProfileId))) {
+      throw new FlowError("FALLBACK_SELECTION_REQUIRED", "Select another execution profile with flow_switch_runtime after reviewing the pinned worktree.");
+    }
     const receipts = await this.stateStore.listReceipts(id);
     const failures = receipts.filter((receipt) => receipt.status === "failed");
     if (run.block.reason === "STOP_RULE") {
@@ -411,7 +485,9 @@ export class RunService {
     if (run.status === "paused") return { status: "blocked", reason: "RUN_PAUSED", runStatus: run.status };
     if (run.status === "blocked") return { status: "blocked", reason: run.block?.reason ?? "RUN_BLOCKED", nodeId: run.block?.nodeId, ...(run.block?.status ? { block: { nodeId: run.block.nodeId, status: run.block.status, next: run.block.next } } : {}), ...(run.block?.details ? { details: run.block.details } : {}), runStatus: run.status,
       action: run.block?.reason === "RATE_LIMIT"
-        ? run.fallbackExecutions?.[run.block.nodeId]
+        ? run.executionProfileId && run.availableExecutionProfiles?.some(({ id }) => id !== run.executionProfileId)
+          ? "Inspect this run and node with flow_retry_inspect. Review the pinned worktree and predecessors, then call flow_switch_runtime with a different available executionProfileId to update this and all remaining nodes."
+          : run.fallbackExecutions?.[run.block.nodeId]
           ? "Inspect this run and node with flow_retry_inspect. If its pinned fallback is valid and the worktree and predecessors are safe, call flow_switch_runtime; otherwise leave the run blocked and report why."
           : "No fallback runtime is pinned for this node. Do not switch runtime. Continue this run only after the primary provider access is restored; otherwise leave it blocked and report that it cannot resume yet."
         : "Resolve the issue, then call flow_continue." };
@@ -438,7 +514,7 @@ export class RunService {
     } else if (result.status === "done") {
       run = { ...run, status: transitionRun(run.status, "complete") };
       await this.stateStore.writeRun(run);
-    } else if (result.status === "ready" && run.fallbackExecutions) {
+    } else if (result.status === "ready" && (run.fallbackExecutions || run.executionProfileSnapshot)) {
       let changed = false;
       for (const node of result.nodes) if (!run.nodeExecutions[node.id]) {
         run.nodeExecutions[node.id] = { runtime: run.runtime, model: node.model, effort: node.effort ?? node.variant ?? "medium",

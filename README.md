@@ -53,9 +53,10 @@ The `flow` client talks only to that local service:
 node src/cli/flow.mjs list
 node src/cli/flow.mjs help
 node src/cli/flow.mjs start --flow hello-flow --workspace /absolute/workspace --runtime codex --mode guided
+# When this source defines multiple execution profiles, add: --execution-profile <id>
 node src/cli/flow.mjs inspect <run-id>
 node src/cli/flow.mjs retry-inspect <run-id> <node-id>
-node src/cli/flow.mjs switch-runtime <run-id> <node-id> --reason "Provider rate limit" --workspace /absolute/workspace --worktree-review "Reviewed partial changes" --reviewed-predecessors
+node src/cli/flow.mjs switch-runtime <run-id> <node-id> --execution-profile <id> --reason "Provider rate limit" --workspace /absolute/workspace --worktree-review "Reviewed partial changes" --reviewed-predecessors
 node src/cli/flow.mjs audit <run-id>
 ```
 
@@ -86,12 +87,16 @@ in this development build. Direct mode and adapter launch fail closed. No
 adapter can run until a later approved change adds local authorization and a
 host launcher.
 
-Each local source may set `execution.runtime` to `codex` or `claude`, plus a
-small `execution.models` map from flow model IDs to models available on that
-machine. `execution.efforts` can translate a few effort values. The resolved
-node settings are pinned in each run; the shared YAML stays unchanged. A
-requested runtime that conflicts with the machine setting is rejected. See
-[the quick guide](docs/guia-rapido.md) for a short example.
+A local source can define reusable `execution.profiles`, each with an ID,
+name, runtime, and optional model/effort mappings. A run selects one profile, so
+separate runs from the same source can use different runtimes. `defaultProfileId`
+can provide a default; otherwise the caller must choose when multiple profiles
+exist. The service pins the selected profile and resolved node settings in the
+run. Existing `execution.runtime`, `execution.models`, and `execution.efforts`
+settings remain supported for sources that do not define execution profiles.
+These profiles choose runtime and model IDs; they do not switch provider
+credentials. The active Codex or Claude session must already be authenticated
+for that runtime. See [the quick guide](docs/guia-rapido.md).
 
 The Herdr plugin build checks for the known legacy runner. It validates and
 copies flow YAML files before removing old entrypoints. Conflicts or unknown
@@ -105,7 +110,8 @@ and connects only to the loopback service. Setup instructions are in
 [docs/codex-mcp.md](docs/codex-mcp.md).
 
 Before a guided run, the Herdr pane checks the service, source, MCP registration,
-and required Skills with `doctor`. It does not test model access or confirm that
+and required Skills for configured execution profiles and legacy runtime settings
+with `doctor`. It does not test model access or confirm that
 the current agent session has loaded the MCP tools. The agent must see
 `flow_list` before starting a run; after registering the MCP, open a new agent
 session if the tools are absent. The pane starts the local service when it is
@@ -216,53 +222,66 @@ and returns the same node with a new `attempt`. The next node stays locked until
 the new checkpoint satisfies the rule. Without `mode: block`, a stop rule ends
 the run as before.
 
-### Per-source runtime fallback
+### Run-scoped execution profiles and rate-limit recovery
 
-A machine can allow one fallback runtime in one source. For example, this
-source starts with Claude and can switch a node to Codex:
+Define execution profiles in the local source configuration. Each profile maps
+the flow's model IDs to IDs supported by its runtime:
 
 ```json
 "execution": {
-  "runtime": "claude",
-  "fallback": {
-    "runtime": "codex",
-    "models": {
-      "anthropic/primary-model": "openai/gpt-6.1-terra",
-      "anthropic/review-model": "openai/gpt-6.1-sol"
+  "profiles": [
+    {
+      "id": "codex",
+      "name": "Codex",
+      "runtime": "codex",
+      "models": {"anthropic/review-model": "openai/review-model"}
     },
-    "agents": { "explorer": { "model": "openai/gpt-6-luna", "effort": "low" } }
-  }
+    {
+      "id": "claude",
+      "name": "Claude",
+      "runtime": "claude",
+      "models": {"openai/review-model": "anthropic/review-model"}
+    }
+  ],
+  "defaultProfileId": "codex"
 }
 ```
 
-Sources without `fallback` cannot switch runtimes. The allowed models are pinned
-when a new run starts. `flow_next` records and returns the selected runtime,
-model, effort, and attempt for each ready node. The receipt must match them.
-After a real provider limit, call `flow_block` with `reasonCode: "RATE_LIMIT"`
-if the run is not already blocked. For an existing block, inspect it with
-`flow_inspect`, then call `flow_retry_inspect` for the blocked node. The run can
-switch runtimes only when that pinned node has a `fallbackExecution` and the
-preflight confirms the fallback runtime/model, ready predecessor receipts, no
-other failures, and no pending retry. Review partial work in the pinned
-worktree too. If every check passes, call `flow_switch_runtime` with the pinned
-workspace, reason, worktree review, and `reviewedPredecessors: true`. The same
-run returns that node on the fallback runtime with a new attempt. Use the
-returned runtime, model, effort, and attempt in the checkpoint.
+The Herdr pane asks which execution profile to use when starting a run. With
+MCP, use the `executionProfiles` returned by `flow_select` and pass the chosen
+ID as `executionProfileId` to `flow_start_guided`. The CLI accepts
+`--execution-profile <id>` on `flow start`. A run pins its selected profile and
+node settings; another run from the same source can select a different one.
 
-If `fallbackExecution` is absent, this run cannot switch runtimes because its
-fallback configuration was not pinned at start. Keep it blocked until access
-to the primary provider is restored; then `flow_continue` can resume the same
-run. If access cannot be restored, report that the run cannot resume yet and
-leave it intact. Do not silently start a replacement run. A provider limit is
-not a completed checkpoint.
+For a real provider rate limit, first confirm the blocked run and node with
+`flow_inspect` and call `flow_retry_inspect`. Review `selectedExecution`,
+`availableExecutionProfiles`, predecessor receipts, `otherFailures`,
+`retryPending`, and partial work in the pinned worktree. If another execution
+profile is available and the checks pass, call `flow_switch_runtime` with its
+`executionProfileId`, the pinned workspace, a reason, a factual worktree review,
+and `reviewedPredecessors: true`. The switch applies to the blocked node and
+all later nodes that do not yet have a receipt. Completed receipts stay intact;
+the run history records the profile change and attempt. Checkpoint using the
+runtime, model, effort, and attempt returned by the service.
 
-The CLI exposes the same recovery operations: `flow retry-inspect <run-id>
-<node-id>`, `flow block <run-id> <node-id> --reason "..." --rate-limit`,
-`flow switch-runtime <run-id> <node-id> ...`, and `flow continue <run-id>
---reason "..."`. Use `--workspace`, `--worktree-review`, and
-`--reviewed-predecessors` for a runtime switch, following the same checks above.
+Execution profiles select a runtime and model IDs; they do not switch Codex or
+Claude accounts. The active agent session must already be authenticated to the
+account that can use the selected runtime.
 
-Capacity estimates and automatic switching are not part of this phase.
+Existing sources may still use `execution.fallback`. That legacy fallback is
+pinned when a run starts and applies to the blocked node only. If no alternate
+execution profile or legacy fallback is available, keep the run intact and
+continue it only after access to its primary provider is restored. Do not start
+a replacement run automatically. Profile selection and switching always require
+an explicit choice; the service does not retry or switch runtimes automatically.
+
+The CLI exposes the same recovery operations:
+
+```sh
+flow retry-inspect <run-id> <node-id>
+flow switch-runtime <run-id> <node-id> --execution-profile <id> --reason "Provider rate limit" --workspace /absolute/workspace --worktree-review "Reviewed partial changes" --reviewed-predecessors
+flow continue <run-id> --reason "Provider access restored"
+```
 
 For the full sequence in plain language, see the [quick guide](docs/guia-rapido.md).
 

@@ -22,35 +22,56 @@ agentes sozinho.
    Também pode conferir manualmente com `flow-server status` e iniciar com
    `flow-server start --source-config ~/.config/flow-server/sources.json --port 4741`.
 4. Use **7 Doctor** no painel ou `flow-server doctor` para conferir serviço,
-   fonte, MCP do Codex ou Claude e Skills do runtime escolhido. O diagnóstico não inicia runs nem testa modelos;
-   ele mostra o acesso aos modelos como `not_tested`. Para checar só um flow,
+   fonte, MCP e Skills dos runtimes configurados nos perfis de execução ou nas
+   configurações legadas. O
+   diagnóstico não inicia runs nem testa acesso aos modelos ou às contas; esses
+   itens aparecem como `not_tested`. Para checar só um flow,
    use `flow-server doctor --profile ahkta --flow sdd-ahkta`.
 5. Na sessão do agente, confirme que a tool `flow_list` aparece. O doctor
    confere o registro do MCP, mas não consegue confirmar se esta sessão carregou
    suas tools. Se elas não aparecerem após configurar o MCP, abra uma nova sessão.
 
-### Escolher o runtime nesta máquina
+### Perfis de execução
 
-Na configuração local da fonte (`~/.config/flow-server/sources.json`), adicione
-`execution` à fonte. O YAML compartilhado do flow continua igual:
+A configuração local da fonte pode oferecer mais de um runtime para o mesmo
+flow. Cada perfil define um runtime e, quando necessário, mapeia os IDs de
+modelo do YAML para IDs aceitos pelo cliente correspondente:
 
 ```json
 "execution": {
-  "runtime": "claude",
-  "models": {
-    "openai/gpt-5.5-fast": "anthropic/modelo-rapido",
-    "openai/gpt-5.5": "anthropic/modelo-principal"
-  },
-  "efforts": { "medium": "high" }
+  "profiles": [
+    {
+      "id": "codex",
+      "name": "Codex",
+      "runtime": "codex",
+      "models": {"anthropic/review-model": "openai/review-model"}
+    },
+    {
+      "id": "claude",
+      "name": "Claude",
+      "runtime": "claude",
+      "models": {"openai/review-model": "anthropic/review-model"}
+    }
+  ],
+  "defaultProfileId": "codex"
 }
 ```
 
-Substitua os nomes de exemplo pelos modelos que o cliente da máquina aceita.
-Se usar Codex e os modelos do YAML, basta `"execution": { "runtime": "codex" }`.
-Ao iniciar um run, o serviço fixa os modelos resolvidos para seus nós. Se
-faltar um modelo no mapa, ele não inicia o run. Uma troca de runtime exige
-editar essa configuração local; não há troca automática durante o run. Para
-OpenRouter, configure o cliente escolhido e use no mapa os IDs aceitos por ele.
+Ajuste os IDs aos modelos disponíveis em cada runtime. O painel pergunta qual
+perfil usar ao criar cada run. Via MCP, escolha um dos `executionProfiles` de
+`flow_select` e passe seu ID como `executionProfileId` para
+`flow_start_guided`. Via CLI, use `flow start --execution-profile <id>`. Se só
+houver um perfil ou existir `defaultProfileId`, esse perfil pode ser usado sem
+uma nova escolha.
+
+A escolha vale apenas para aquela run; outra run pode usar outro perfil. O
+serviço fixa o perfil e os modelos resolvidos na run. O perfil não troca a conta
+autenticada: a sessão ativa de Codex ou Claude precisa ter acesso à conta que
+pode usar o runtime escolhido.
+
+Fontes antigas com `execution.runtime`, `execution.models` e `execution.efforts`
+continuam aceitas quando não usam `execution.profiles`. O `execution.fallback`
+legado também continua disponível para trocar somente o nó bloqueado.
 
 ## Rodar um flow
 
@@ -59,8 +80,8 @@ OpenRouter, configure o cliente escolhido e use no mapa os IDs aceitos por ele.
 2. O agente usa `flow_list` e `flow_select` para encontrar o flow. Se houver
    uma única opção, ele segue. Se houver mais de uma, você escolhe antes de
    começar.
-3. `flow_start_guided` cria o run com o runtime configurado na máquina. Guarde
-   seu ID (campo `id`); ele será o
+3. `flow_start_guided` cria o run com o perfil escolhido ou o runtime legado
+   configurado na fonte. Guarde seu ID (campo `id`); ele será o
    `runId` usado nas próximas chamadas.
 4. O agente chama `flow_next`, executa os nós prontos conforme as instruções
    recebidas e salva o resultado real com `flow_checkpoint`. Depois chama
@@ -120,37 +141,41 @@ recibo `FAIL` fica no histórico. A próxima etapa espera o novo checkpoint do
 `independent_verify` com resultado aprovado. Sem `mode: block`, a regra
 encerra o run.
 
-### Fallback de runtime
-
-O fallback é definido por perfil no `sources.json` da máquina. Um perfil sem
-`execution.fallback` não troca de runtime. Em cada novo run, o plugin fixa os
-modelos permitidos; `flow_next` registra a escolha de cada nó antes da execução.
+### Trocar o perfil depois de um rate limit
 
 Se o runtime atingir um limite antes do checkpoint, o agente chama `flow_block`
 com `reasonCode: "RATE_LIMIT"` somente se o run ainda não estiver bloqueado.
 Para um bloqueio existente, confirma o run e o nó em `flow_inspect` e chama
-`flow_retry_inspect`. Confere `runStatus`, `selectedExecution`,
-`fallbackExecution`, todos os recibos anteriores, `otherFailures` e
-`retryPending`; também revisa o trabalho parcial no worktree fixado.
+`flow_retry_inspect`. Confere `selectedExecution`, `availableExecutionProfiles`,
+todos os recibos anteriores, `otherFailures` e `retryPending`; também revisa o
+trabalho parcial no worktree fixado.
 
-Só pode chamar `flow_switch_runtime` se o bloqueio for `RATE_LIMIT` para aquele
-nó, houver `fallbackExecution` fixado com outro runtime, todos os nós anteriores
-estiverem `completed` ou `skipped`, não houver outras falhas nem retry pendente,
-e o worktree estiver seguro. Informa o worktree fixado, o motivo e a revisão;
-define `reviewedPredecessors: true` só depois de conferir todos os anteriores.
-O mesmo nó volta com outro `attempt`, modelo e runtime. O checkpoint usa os
-valores retornados, e a troca aparece na auditoria.
+Só pode chamar `flow_switch_runtime` quando o run estiver bloqueado por
+`RATE_LIMIT` naquele nó, houver outro perfil de execução disponível, todos os
+predecessores estiverem `completed` ou `skipped`, não houver outras falhas nem
+retry pendente, e o worktree estiver seguro. Informa o novo
+`executionProfileId`, o workspace fixado, o motivo e a revisão; define
+`reviewedPredecessors: true` só depois de conferir os predecessores. A troca
+vale para o nó bloqueado e todos os nós seguintes que ainda não têm receipt. Os
+receipts concluídos permanecem intactos. Usa no checkpoint o runtime, modelo,
+effort e `attempt` retornados pelo serviço.
 
-Sem `fallbackExecution`, este run não pode trocar de runtime: a configuração
-fica fixada quando o run começa. Ele pode continuar no mesmo runtime depois
-que o acesso ao provider primário for restaurado, usando `flow_continue`. Se o
-limite ainda estiver ativo, deixa o run bloqueado e informa que ainda não pode
-retomar. Não inicia outro run sem orientação do dev.
+O perfil seleciona runtime e modelos, mas não troca credenciais. A sessão ativa
+do agente precisa estar autenticada em uma conta que tenha acesso ao runtime
+selecionado.
 
-Exemplo: `gate0_check` parou por falta de acesso. O dev corrige o acesso; o
-agente confere e continua em `gate0_check`. Se uma revisão externa ainda
-rejeitar a ação, o agente mantém o run parado. O limite padrão é de três
-novas tentativas por nó; o flow pode definir outro limite em `retry`.
+Fontes antigas podem ter um `fallbackExecution` fixado no run. Esse caminho
+legado troca somente o nó bloqueado. Se não houver perfil alternativo nem
+fallback legado, mantém o mesmo run bloqueado até o acesso ao provider primário
+ser restaurado; então usa `flow_continue`. Não inicia outro run por conta
+própria.
+
+Exemplo pela CLI:
+
+```sh
+flow retry-inspect <run-id> <node-id>
+flow switch-runtime <run-id> <node-id> --execution-profile codex --reason "Provider rate limit" --workspace /caminho/fixado --worktree-review "Revisei alterações parciais" --reviewed-predecessors
+```
 
 Um run pausado precisa de `flow_lifecycle` com `resume`. Um run `stopped` é
 definitivo: o campo `stop` em `flow_inspect` mostra o motivo e o próximo passo.

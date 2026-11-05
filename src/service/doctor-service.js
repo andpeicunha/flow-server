@@ -45,13 +45,18 @@ export async function diagnoseFlowSetup({ stateDir, sourceConfig, profileId, flo
   const effective = [];
   await check("execution", async () => {
     for (const entry of entries) {
-      const resolved = sourceService.resolve
-        ? await sourceService.resolve({ flowId: entry.flow.id, profileId: entry.sourceId })
-        : { flowDefinition: entry.flow, runtime: sourceService.sources.find((source) => source.id === entry.sourceId)?.execution?.runtime };
-      effective.push({ flow: resolved.flowDefinition, runtime: resolved.runtime ?? "codex", source: sourceService.sources.find((source) => source.id === entry.sourceId) });
-      if (resolved.fallbackExecutions) effective.push({ source: sourceService.sources.find((source) => source.id === entry.sourceId), runtime: Object.values(resolved.fallbackExecutions)[0]?.runtime,
-        flow: { id: resolved.flowDefinition.id, nodes: resolved.flowDefinition.nodes.map((node) => ({ ...node,
-          model: resolved.fallbackExecutions[node.id].model, effort: resolved.fallbackExecutions[node.id].effort })) } });
+      const source = sourceService.sources.find((item) => item.id === entry.sourceId);
+      const executionProfiles = source?.execution?.profiles ?? [];
+      const variants = executionProfiles.length ? executionProfiles.map(({ id }) => id) : [undefined];
+      for (const executionProfileId of variants) {
+        const resolved = sourceService.resolve
+          ? await sourceService.resolve({ flowId: entry.flow.id, profileId: entry.sourceId, ...(executionProfileId ? { executionProfileId } : {}) })
+          : { flowDefinition: entry.flow, runtime: source?.execution?.runtime };
+        effective.push({ flow: resolved.flowDefinition, runtime: resolved.runtime ?? "codex", source });
+        if (resolved.fallbackExecutions) effective.push({ source, runtime: Object.values(resolved.fallbackExecutions)[0]?.runtime,
+          flow: { id: resolved.flowDefinition.id, nodes: resolved.flowDefinition.nodes.map((node) => ({ ...node,
+            model: resolved.fallbackExecutions[node.id].model, effort: resolved.fallbackExecutions[node.id].effort })) } });
+      }
     }
     return { runtimes: [...new Set(effective.map((item) => item.runtime))].sort() };
   });
