@@ -79,6 +79,7 @@ test("a rate limit switches only the pending node and pins its new model", async
     await service.checkpoint("run_fallback", receipt("preflight", "anthropic/claude-sonnet-5-5", "claude"));
     assert.equal((await service.next("run_fallback")).nodes[0].model, "anthropic/claude-sonnet-5-5");
     await service.block("run_fallback", { nodeId: "build", reasonCode: "RATE_LIMIT", reason: "Claude usage limit reached." });
+    assert.match((await service.next("run_fallback")).action, /flow_retry_inspect.*flow_switch_runtime/);
     await assert.rejects(service.continueRun("run_fallback", { reason: "Try again." }), { code: "FALLBACK_SELECTION_REQUIRED" });
     await assert.rejects(service.switchNode("run_fallback", { nodeId: "build", reason: "Use Codex.", workspace: "/work/other", worktreeReview: "Checked changed files.", reviewedPredecessors: true }), { code: "RETRY_WORKSPACE_MISMATCH" });
     const switched = await service.switchNode("run_fallback", { nodeId: "build", reason: "Claude is rate limited.", workspace, worktreeReview: "Checked changed files and the preflight receipt.", reviewedPredecessors: true });
@@ -102,6 +103,7 @@ test("a run without configured fallback cannot switch providers", async () => {
   try {
     await service.next("run_fallback");
     await service.block("run_fallback", { nodeId: "preflight", reasonCode: "RATE_LIMIT", reason: "Provider limit reached." });
+    assert.match((await service.next("run_fallback")).action, /No fallback runtime is pinned.*primary provider access is restored/);
     await assert.rejects(service.switchNode("run_fallback", { nodeId: "preflight", reason: "Try another provider.", workspace, worktreeReview: "Checked worktree.", reviewedPredecessors: true }), { code: "FALLBACK_NOT_CONFIGURED" });
   } finally { await rm(directory, { recursive: true, force: true }); }
 });

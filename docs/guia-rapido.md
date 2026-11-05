@@ -127,13 +127,25 @@ O fallback é definido por perfil no `sources.json` da máquina. Um perfil sem
 modelos permitidos; `flow_next` registra a escolha de cada nó antes da execução.
 
 Se o runtime atingir um limite antes do checkpoint, o agente chama `flow_block`
-com `reasonCode: "RATE_LIMIT"`. Depois, usa `flow_retry_inspect` para conferir
-o worktree e os nós anteriores. Se houve trabalho parcial, também revisa os
-arquivos alterados. Com essa revisão feita, chama `flow_switch_runtime` com o
-motivo, o worktree fixado e `reviewedPredecessors: true`. O mesmo nó volta com
-outro `attempt`, modelo e runtime. O checkpoint precisa registrar exatamente
-essa escolha. A troca aparece na auditoria. Não há troca automática nem
-estimativa de capacidade nesta fase.
+com `reasonCode: "RATE_LIMIT"` somente se o run ainda não estiver bloqueado.
+Para um bloqueio existente, confirma o run e o nó em `flow_inspect` e chama
+`flow_retry_inspect`. Confere `runStatus`, `selectedExecution`,
+`fallbackExecution`, todos os recibos anteriores, `otherFailures` e
+`retryPending`; também revisa o trabalho parcial no worktree fixado.
+
+Só pode chamar `flow_switch_runtime` se o bloqueio for `RATE_LIMIT` para aquele
+nó, houver `fallbackExecution` fixado com outro runtime, todos os nós anteriores
+estiverem `completed` ou `skipped`, não houver outras falhas nem retry pendente,
+e o worktree estiver seguro. Informa o worktree fixado, o motivo e a revisão;
+define `reviewedPredecessors: true` só depois de conferir todos os anteriores.
+O mesmo nó volta com outro `attempt`, modelo e runtime. O checkpoint usa os
+valores retornados, e a troca aparece na auditoria.
+
+Sem `fallbackExecution`, este run não pode trocar de runtime: a configuração
+fica fixada quando o run começa. Ele pode continuar no mesmo runtime depois
+que o acesso ao provider primário for restaurado, usando `flow_continue`. Se o
+limite ainda estiver ativo, deixa o run bloqueado e informa que ainda não pode
+retomar. Não inicia outro run sem orientação do dev.
 
 Exemplo: `gate0_check` parou por falta de acesso. O dev corrige o acesso; o
 agente confere e continua em `gate0_check`. Se uma revisão externa ainda

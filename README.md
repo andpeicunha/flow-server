@@ -51,8 +51,11 @@ The `flow` client talks only to that local service:
 
 ```sh
 node src/cli/flow.mjs list
+node src/cli/flow.mjs help
 node src/cli/flow.mjs start --flow hello-flow --workspace /absolute/workspace --runtime codex --mode guided
 node src/cli/flow.mjs inspect <run-id>
+node src/cli/flow.mjs retry-inspect <run-id> <node-id>
+node src/cli/flow.mjs switch-runtime <run-id> <node-id> --reason "Provider rate limit" --workspace /absolute/workspace --worktree-review "Reviewed partial changes" --reviewed-predecessors
 node src/cli/flow.mjs audit <run-id>
 ```
 
@@ -235,12 +238,29 @@ source starts with Claude and can switch a node to Codex:
 Sources without `fallback` cannot switch runtimes. The allowed models are pinned
 when a new run starts. `flow_next` records and returns the selected runtime,
 model, effort, and attempt for each ready node. The receipt must match them.
-After a real provider limit, call `flow_block` with `reasonCode: "RATE_LIMIT"`.
-Inspect the node and its predecessors with `flow_retry_inspect`, review partial
-work in the pinned worktree, then call `flow_switch_runtime` with the node ID,
+After a real provider limit, call `flow_block` with `reasonCode: "RATE_LIMIT"`
+if the run is not already blocked. For an existing block, inspect it with
+`flow_inspect`, then call `flow_retry_inspect` for the blocked node. The run can
+switch runtimes only when that pinned node has a `fallbackExecution` and the
+preflight confirms the fallback runtime/model, ready predecessor receipts, no
+other failures, and no pending retry. Review partial work in the pinned
+worktree too. If every check passes, call `flow_switch_runtime` with the pinned
 workspace, reason, worktree review, and `reviewedPredecessors: true`. The same
-run returns that node on the fallback runtime with a new attempt. The switch
-stays in the run audit. A provider limit is not a completed checkpoint.
+run returns that node on the fallback runtime with a new attempt. Use the
+returned runtime, model, effort, and attempt in the checkpoint.
+
+If `fallbackExecution` is absent, this run cannot switch runtimes because its
+fallback configuration was not pinned at start. Keep it blocked until access
+to the primary provider is restored; then `flow_continue` can resume the same
+run. If access cannot be restored, report that the run cannot resume yet and
+leave it intact. Do not silently start a replacement run. A provider limit is
+not a completed checkpoint.
+
+The CLI exposes the same recovery operations: `flow retry-inspect <run-id>
+<node-id>`, `flow block <run-id> <node-id> --reason "..." --rate-limit`,
+`flow switch-runtime <run-id> <node-id> ...`, and `flow continue <run-id>
+--reason "..."`. Use `--workspace`, `--worktree-review`, and
+`--reviewed-predecessors` for a runtime switch, following the same checks above.
 
 Capacity estimates and automatic switching are not part of this phase.
 

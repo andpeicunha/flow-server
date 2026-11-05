@@ -410,8 +410,10 @@ export class RunService {
     if (["stopped", "failed"].includes(run.status)) return { status: "blocked", reason: "RUN_TERMINAL", runStatus: run.status, ...(run.stop ? { stop: run.stop } : {}) };
     if (run.status === "paused") return { status: "blocked", reason: "RUN_PAUSED", runStatus: run.status };
     if (run.status === "blocked") return { status: "blocked", reason: run.block?.reason ?? "RUN_BLOCKED", nodeId: run.block?.nodeId, ...(run.block?.status ? { block: { nodeId: run.block.nodeId, status: run.block.status, next: run.block.next } } : {}), ...(run.block?.details ? { details: run.block.details } : {}), runStatus: run.status,
-      action: run.block?.reason === "RATE_LIMIT" && run.fallbackExecutions?.[run.block.nodeId]
-        ? "Review the pinned worktree and predecessors, then call flow_switch_runtime."
+      action: run.block?.reason === "RATE_LIMIT"
+        ? run.fallbackExecutions?.[run.block.nodeId]
+          ? "Inspect this run and node with flow_retry_inspect. If its pinned fallback is valid and the worktree and predecessors are safe, call flow_switch_runtime; otherwise leave the run blocked and report why."
+          : "No fallback runtime is pinned for this node. Do not switch runtime. Continue this run only after the primary provider access is restored; otherwise leave it blocked and report that it cannot resume yet."
         : "Resolve the issue, then call flow_continue." };
     if (run.status === "created") {
       run = { ...run, status: transitionRun(run.status, "start") };

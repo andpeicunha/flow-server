@@ -45,6 +45,9 @@ test("flow-mcp uses only the local service for guided runs and audits", async ()
 
 test("flow-mcp advertises a bounded tool set and fails unavailable actions closed", async () => {
   assert.deepEqual(tools.map((tool) => tool.name), ["flow_list", "flow_select", "flow_inspect", "flow_retry_inspect", "flow_retry_node", "flow_block", "flow_switch_runtime", "flow_continue", "flow_start_guided", "flow_next", "flow_lifecycle", "flow_checkpoint", "flow_audit", "flow_review", "flow_open"]);
+  assert.match(tools.find((tool) => tool.name === "flow_retry_inspect").description, /fallbackExecution/);
+  assert.match(tools.find((tool) => tool.name === "flow_switch_runtime").description, /do not switch or start a replacement run/);
+  assert.match(tools.find((tool) => tool.name === "flow_continue").description, /only after the primary runtime's provider access has actually been restored/);
   const initialized = await handleRequest({}, { method: "initialize" });
   assert.equal(initialized.serverInfo.name, "flow-mcp");
   const next = await callTool({ next: async () => ({ status: "ready", nodes: [] }) }, "flow_next", { runId: "run_test" });

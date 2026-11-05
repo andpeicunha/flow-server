@@ -277,6 +277,9 @@ test("CLI preserves a live service lock when its port does not answer", async ()
 });
 
 test("flow CLI uses the local API and requires explicit direct-mode approval", async () => {
+  const help = await execFile(process.execPath, [flowCli, "help"]);
+  assert.match(help.stdout, /fallbackExecution/);
+  assert.match(help.stdout, /do not switch or start a replacement run/);
   const directory = await mkdtemp(join(tmpdir(), "flow-client-test-"));
   const flows = join(directory, "flows");
   const workspace = join(directory, "workspace");
@@ -299,6 +302,15 @@ test("flow CLI uses the local API and requires explicit direct-mode approval", a
     assert.equal(run.task, "Keep this task");
     const inspected = await execFile(process.execPath, withStateDir("inspect", run.id));
     assert.equal(JSON.parse(inspected.stdout).id, run.id);
+    const ready = await execFile(process.execPath, withStateDir("next", run.id));
+    assert.equal(JSON.parse(ready.stdout).nodes[0].id, "work");
+    const blocked = await execFile(process.execPath, withStateDir("block", run.id, "work", "--reason", "Provider limit reached", "--rate-limit"));
+    assert.equal(JSON.parse(blocked.stdout).block.reason, "RATE_LIMIT");
+    const retryInspection = await execFile(process.execPath, withStateDir("retry-inspect", run.id, "work"));
+    assert.equal(JSON.parse(retryInspection.stdout).fallbackExecution, undefined);
+    const blockedNext = await execFile(process.execPath, withStateDir("next", run.id));
+    assert.match(JSON.parse(blockedNext.stdout).action, /No fallback runtime is pinned/);
+    await assert.rejects(execFile(process.execPath, withStateDir("switch-runtime", run.id, "work", "--reason", "Use another runtime", "--workspace", workspace, "--worktree-review", "No partial changes", "--reviewed-predecessors")), /no configured fallback/i);
     const audit = await execFile(process.execPath, withStateDir("audit", run.id));
     assert.equal(JSON.parse(audit.stdout).result, "incomplete");
     await new FileStateStore(directory).writeRun({ ...run, status: "completed" });

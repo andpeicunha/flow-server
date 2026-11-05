@@ -66,13 +66,24 @@ old receipt and returns only that node with its new `attempt` number. A paused r
 requires `flow_lifecycle` with `resume` first. Terminal runs cannot continue.
 
 A source may configure a fallback runtime for new runs. `flow_next` pins each
-ready node's runtime, model, effort, and attempt. If the provider reaches a
-limit before a checkpoint, use `flow_block` with `reasonCode: "RATE_LIMIT"`.
-Inspect the node with `flow_retry_inspect`, review the pinned worktree and
-predecessors, then call `flow_switch_runtime` with the node ID, pinned workspace,
-reason, worktree review, and `reviewedPredecessors: true`. Use the returned
-runtime, model, effort, and attempt in the next receipt. Profiles without a
-fallback cannot switch runtimes.
+ready node's runtime, model, effort, and attempt. For a real provider limit,
+call `flow_block` with `reasonCode: "RATE_LIMIT"` only if the run is not already
+blocked. For an existing block, use `flow_inspect` to confirm its status,
+reason, and node, then `flow_retry_inspect` on that node. Check `runStatus`,
+`selectedExecution`, `fallbackExecution`, all predecessor receipts,
+`otherFailures`, and `retryPending`; also review partial work in the pinned
+worktree. Switch only if the run is blocked for this `RATE_LIMIT`, the pinned
+fallback exists and uses another runtime, all predecessors are completed or
+skipped, there are no other failures or pending retries, and the worktree is
+safe. Then call `flow_switch_runtime` with the pinned workspace, reason, review,
+and `reviewedPredecessors: true`. Use its returned runtime, model, effort, and
+attempt for the next checkpoint.
+
+If `fallbackExecution` is absent, do not switch runtimes: this run cannot gain a
+fallback after it starts. Keep it blocked until the primary provider access is
+restored; only then use `flow_continue` on the same run. If access is still
+limited, leave the run intact and report that it cannot resume yet. Do not
+start a replacement run without the developer's direction.
 `flow_retry_node` remains available for older clients but is no longer the
 normal path for guided runs.
 Use `flow_inspect` and `flow_audit` for run review. Audit reports `passed` only
