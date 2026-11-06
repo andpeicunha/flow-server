@@ -15,6 +15,7 @@
         "title": { "type": "string", "minLength": 1, "maxLength": 160 },
         "description": { "type": "string", "maxLength": 4000 },
         "keepAwake": { "type": "string", "maxLength": 32 },
+        "taskContext": { "enum": ["repeat", "once"] },
         "route": { "$ref": "#/$defs/routing" },
         "routing": { "$ref": "#/$defs/routing" },
         "stopWhen": { "anyOf": [{ "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/stopRule" } }, { "$ref": "#/$defs/stopRule" }] },
@@ -31,6 +32,7 @@
         "title": { "type": "string", "minLength": 1, "maxLength": 160 },
         "description": { "type": "string", "maxLength": 4000 },
         "keepAwake": { "type": "string", "maxLength": 32 },
+        "taskContext": { "enum": ["repeat", "once"] },
         "route": { "$ref": "#/$defs/routing" },
         "routing": { "$ref": "#/$defs/routing" },
         "stopWhen": { "anyOf": [{ "type": "array", "maxItems": 64, "items": { "$ref": "#/$defs/stopRule" } }, { "$ref": "#/$defs/stopRule" }] },
@@ -99,8 +101,10 @@
         "skills": { "$ref": "#/$defs/stringList" }, "mcps": { "type": "array", "maxItems": 64, "uniqueItems": true, "items": { "type": "string", "pattern": "^[A-Za-z0-9._:/-]{1,128}$" } }, "constraints": { "$ref": "#/$defs/stringList" },
         "prompt": { "type": "string", "maxLength": 65536 }, "input": { "type": "string", "maxLength": 65536 },
         "output": { "type": "string", "maxLength": 4096 }, "when": { "$ref": "#/$defs/condition" },
+        "outputSchema": { "type": "object", "maxProperties": 128 },
         "evidencePolicy": { "type": "string", "maxLength": 4096 }, "timeout": { "type": "integer", "minimum": 1, "maximum": 604800 },
-        "retry": { "type": "integer", "minimum": 0, "maximum": 10 }, "parallelSafe": { "type": "boolean" }
+        "retry": { "type": "integer", "minimum": 0, "maximum": 10 }, "parallelSafe": { "type": "boolean" },
+        "reusable": { "type": "boolean" }, "skillToolSupport": { "type": "object", "additionalProperties": false, "properties": { "codex": { "type": "boolean" }, "claude": { "type": "boolean" } } }
       },
       "not": { "type": "object", "properties": { "after": {}, "dependsOn": {} }, "required": ["after", "dependsOn"] }
     }

@@ -49,22 +49,34 @@ function renderValue(value) {
   return JSON.stringify(value, null, 2);
 }
 
+function promptOutputOf(receipt) {
+  const output = outputOf(receipt);
+  return output && typeof output === "object" && !Array.isArray(output)
+    && typeof output.reportPath === "string" && typeof output.reportSha256 === "string"
+    ? { ...output, reportAvailableOnRequest: true }
+    : output;
+}
+
 function renderPrompt(template, run, receipts, flow) {
   if (typeof template !== "string") return "";
   const context = (flow.nodes ?? []).flatMap((node) => {
     const receipt = receipts.get(node.id);
-    return receipt?.status === "completed" ? [`## ${node.id}`, renderValue(outputOf(receipt))] : [];
+    return receipt?.status === "completed" ? [`## ${node.id}`, renderValue(promptOutputOf(receipt))] : [];
   }).join("\n\n");
   const lastAnswer = [...receipts.values()].filter((receipt) => receipt.status === "completed")
     .sort((left, right) => String(left.recordedAt ?? "").localeCompare(String(right.recordedAt ?? "")) || left.nodeId.localeCompare(right.nodeId))
     .at(-1);
-  return template.replace(/\{\{\s*task\s*\}\}/g, run.task ?? "")
+  const task = flow.taskContext === "once" && run.taskContextDelivered
+    ? "The original task was supplied earlier in this run. Continue using that same task."
+    : run.task ?? "";
+  const reportProtocol = "\n\n### Full report protocol\nFor a substantial result, call flow_report_write with this runId and nodeId and the complete JSON report. Put the returned reportPath and reportSha256 in receipt.output with a concise summary (up to 4 KiB). Keep report-referenced receipt output up to 8 KiB. Use flow_report_read only when a prior summary is insufficient. Short results may stay inline.";
+  return (template.replace(/\{\{\s*task\s*\}\}/g, task)
     .replace(/\{\{\s*context\s*\}\}/g, context)
-    .replace(/\{\{\s*lastAnswer\s*\}\}/g, lastAnswer ? renderValue(outputOf(lastAnswer)) : "")
+    .replace(/\{\{\s*lastAnswer\s*\}\}/g, lastAnswer ? renderValue(promptOutputOf(lastAnswer)) : "")
     .replace(/\{\{\s*step\.([a-z][a-z0-9_-]{0,62})\s*\}\}/g, (_match, nodeId) => {
       const receipt = receipts.get(nodeId);
-      return receipt ? renderValue(outputOf(receipt)) : "";
-    });
+      return receipt ? renderValue(promptOutputOf(receipt)) : "";
+    })) + `\n\nRun ID: ${run.id}.` + reportProtocol;
 }
 
 function dependenciesOf(node) {
@@ -75,6 +87,17 @@ function readyNode(node, receipts) {
   const dependencies = dependenciesOf(node).map((id) => receipts.get(id));
   if (dependencies.some((receipt) => receipt?.status === "failed")) return { ready: false, failedDependency: true };
   return { ready: dependencies.every(Boolean) };
+}
+
+function skillWarningsFor(node, run) {
+  if (!node.skills?.length) return undefined;
+  const runtime = node.executor ?? run.runtime;
+  const skillToolAvailable = node.skillToolSupport?.[runtime];
+  if (skillToolAvailable === true) return undefined;
+  return [{
+    code: skillToolAvailable === false ? "SKILL_TOOL_UNAVAILABLE" : "SKILL_TOOL_CAPABILITY_UNVERIFIED",
+    reason: skillToolAvailable === false ? `The configured ${runtime} executor does not expose the Skill tool for this node.` : `The configured ${runtime} executor's Skill tool capability is unknown; verify it before relying on declared Skills.`
+  }];
 }
 
 export function planFlowNext(flow, run, receiptList) {
@@ -123,6 +146,7 @@ export function planFlowNext(flow, run, receiptList) {
     if (!node.when) return true;
     return evaluateCondition(node.when, receipts).matches;
   }).map((node) => ({
+    ...(skillWarningsFor(node, run) ? { skillWarnings: skillWarningsFor(node, run) } : {}),
     id: node.id,
     title: node.title ?? node.id,
     agent: node.agent,
@@ -132,6 +156,7 @@ export function planFlowNext(flow, run, receiptList) {
     variant: node.variant,
     executor: node.executor,
     skills: node.skills ?? [],
+    ...(node.reusable === true ? { reusable: true } : {}),
     mcps: node.mcps ?? [],
     toolGuidance: "Use only the Skills and MCPs declared by this node and allowed by the active profile.",
     constraints: node.constraints ?? [],

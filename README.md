@@ -201,6 +201,10 @@ flow ID or when exactly one flow matches routing terms. Otherwise, the CLI or MC
 before starting. `flow_next` then returns ready nodes with the exact configured
 agent, model, effort, executor, Skills, constraints, and prompt. The agent
 records bounded structured output in node receipts so later conditions can run.
+All independent nodes returned together by one `flow_next` call may run in
+parallel. Complete each node separately, write its report separately when
+needed, and checkpoint every result before asking for the next scheduling
+decision. Dependencies, conditions, and stop rules remain authoritative.
 The first `flow_next` starts the run. It marks the run complete when all required
 nodes finish; the CLI lifecycle command controls an active run.
 The CLI audit command reports `passed` only for a completed run with evidence for every
@@ -365,6 +369,63 @@ sequenceDiagram
         end
     end
 ```
+
+#### Referenced reports, output contracts, and reuse
+
+Every node prompt includes the report protocol. For a substantial result, call
+`flow_report_write` with the current `runId`, `nodeId`, and complete JSON report.
+Put the returned `reportPath` and `reportSha256` beside a concise `summary` in
+`receipt.output`. A report-backed output is limited to 8 KiB; the full report
+stays under the run dossier. Later prompts carry only that compact output. Use
+`flow_report_read` to retrieve a previous full report when its summary is not
+enough. The tool reads only a checkpointed report from the named run and node.
+`flow_audit` checks that every referenced file still exists and matches its
+recorded digest. Short outputs can remain inline for old flows.
+
+Flows may declare `outputSchema` on a node to validate `receipt.output` at
+checkpoint. The schema uses JSON Schema 2020-12. A node with `reusable: true`
+may be named in an explicit receipt-reuse request. Reuse requires matching
+flow, execution profile, task, workspace revision, all working-tree changes,
+and OpenSpec content; the server rejects unavailable or changed context. Every
+reused receipt records its source and context hash. Select all predecessors too
+so conditions and dependencies keep the same evidence.
+
+```yaml
+taskContext: once
+nodes:
+  - id: intake
+    reusable: true
+    skillToolSupport: { codex: false, claude: true } # declare only known runtime capabilities
+    outputSchema:
+      type: object
+      required: [decision, summary]
+      properties:
+        decision: { enum: [continue, stop] }
+        summary: { type: string, maxLength: 4000 }
+```
+
+`taskContext: once` is opt-in. It supplies the task to the first ready batch and
+uses a short reference in later prompts. An executor that lacks earlier prompt
+context can call `flow_inspect` for the run task. Skill nodes with
+`skillToolSupport` returns an unavailable warning for a runtime set to `false`
+and an unverified warning when that runtime is omitted. A `true` value is the
+flow author's capability declaration, not proof that a Skill was loaded.
+
+To reuse selected analysis, start a new run with both `reuseFromRunId` and
+`reuseNodeIds` (MCP `flow_start_guided`), or use CLI flags:
+
+```sh
+flow start --flow my-flow --workspace /absolute/workspace --mode guided \
+  --reuse-from run_source-id --reuse-nodes intake,recon,gate0
+```
+
+Before/after token comparisons use the same flow and comparable workspace/task.
+Record real `orchestratorTokenUsage.inputTokens` and
+`orchestratorTokenUsage.outputTokens` for the orchestrator, plus `tokenUsage`
+when the node executor provides it. Use `flow review <flowId> --compare-versions`
+or the `flow_review` MCP tool to see per-node and total counts by flow content
+hash. Missing usage stays marked as missing; the service does not estimate
+token counts.
 
 The Test Auditor runs only when the flow YAML defines that node. A `stopped`
 run is final; `flow_inspect` shows which stop rule ended it. Existing runs keep

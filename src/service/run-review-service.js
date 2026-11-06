@@ -15,7 +15,7 @@ function round(value) {
 function nodeSummary(receipts) {
   const byNode = new Map();
   for (const receipt of receipts) {
-    const current = byNode.get(receipt.nodeId) ?? { nodeId: receipt.nodeId, receipts: 0, completed: 0, failed: 0, skipped: 0, retries: 0, durations: [], validationFailures: 0, signals: 0, missingMetrics: 0 };
+    const current = byNode.get(receipt.nodeId) ?? { nodeId: receipt.nodeId, receipts: 0, completed: 0, failed: 0, skipped: 0, retries: 0, durations: [], validationFailures: 0, signals: 0, missingMetrics: 0, inputTokens: 0, outputTokens: 0, tokenUsageReceipts: 0, missingTokenUsage: 0, orchestratorInputTokens: 0, orchestratorOutputTokens: 0, orchestratorUsageReceipts: 0, missingOrchestratorUsage: 0 };
     current.receipts += 1;
     current[receipt.stopRuleBlocked ? "failed" : receipt.status] += 1;
     current.retries += (receipt.attempt ?? 1) > 1 ? 1 : 0;
@@ -23,13 +23,36 @@ function nodeSummary(receipts) {
     else current.missingMetrics += 1;
     if (receipt.validation?.result === "failed") current.validationFailures += 1;
     current.signals += receipt.signals?.length ?? 0;
+    if (receipt.tokenUsage) {
+      current.inputTokens += receipt.tokenUsage.inputTokens;
+      current.outputTokens += receipt.tokenUsage.outputTokens;
+      current.tokenUsageReceipts += 1;
+    } else current.missingTokenUsage += 1;
+    if (receipt.orchestratorTokenUsage) {
+      current.orchestratorInputTokens += receipt.orchestratorTokenUsage.inputTokens;
+      current.orchestratorOutputTokens += receipt.orchestratorTokenUsage.outputTokens;
+      current.orchestratorUsageReceipts += 1;
+    } else current.missingOrchestratorUsage += 1;
     byNode.set(receipt.nodeId, current);
   }
-  return [...byNode.values()].sort((left, right) => left.nodeId.localeCompare(right.nodeId)).map(({ durations, ...node }) => ({
+  return [...byNode.values()].sort((left, right) => left.nodeId.localeCompare(right.nodeId)).map(({ durations, inputTokens, outputTokens, tokenUsageReceipts, missingTokenUsage, orchestratorInputTokens, orchestratorOutputTokens, orchestratorUsageReceipts, missingOrchestratorUsage, ...node }) => ({
     ...node,
     successRate: node.receipts ? round(node.completed / node.receipts) : 0,
-    averageDurationMs: durations.length ? Math.round(durations.reduce((sum, value) => sum + value, 0) / durations.length) : null
+    averageDurationMs: durations.length ? Math.round(durations.reduce((sum, value) => sum + value, 0) / durations.length) : null,
+    tokenUsage: { inputTokens, outputTokens, receiptsWithUsage: tokenUsageReceipts, missingReceipts: missingTokenUsage },
+    orchestratorTokenUsage: { inputTokens: orchestratorInputTokens, outputTokens: orchestratorOutputTokens, receiptsWithUsage: orchestratorUsageReceipts, missingReceipts: missingOrchestratorUsage }
   }));
+}
+
+function tokenUsageOf(receipts, field) {
+  return receipts.reduce((totals, receipt) => {
+    if (receipt[field]) {
+      totals.inputTokens += receipt[field].inputTokens;
+      totals.outputTokens += receipt[field].outputTokens;
+      totals.receiptsWithUsage += 1;
+    } else totals.missingReceipts += 1;
+    return totals;
+  }, { inputTokens: 0, outputTokens: 0, receiptsWithUsage: 0, missingReceipts: 0 });
 }
 
 export class RunReviewService {
@@ -100,6 +123,8 @@ export class RunReviewService {
         runIds: group.runs.map((run) => run.id),
         successRate: round(successfulRuns / group.runs.length),
         receiptsAnalyzed: group.receipts.length,
+        tokenUsage: tokenUsageOf(group.receipts, "tokenUsage"),
+        orchestratorTokenUsage: tokenUsageOf(group.receipts, "orchestratorTokenUsage"),
         missingReceiptRuns: runEvidence.filter((evidence) => evidence.completeness === "incomplete" && evidence.missingNodeIds.length).map((evidence) => evidence.runId),
         runEvidence,
         nodeMetrics: metrics
@@ -111,7 +136,9 @@ export class RunReviewService {
         ...(node.failed ? [{ code: "NODE_FAILURES_RECORDED", flowContentHash: version.flowContentHash, nodeId: node.nodeId, count: node.failed }] : []),
         ...(node.retries ? [{ code: "NODE_RETRIES_RECORDED", flowContentHash: version.flowContentHash, nodeId: node.nodeId, count: node.retries }] : []),
         ...(node.signals ? [{ code: "NODE_REVIEW_SIGNALS_RECORDED", flowContentHash: version.flowContentHash, nodeId: node.nodeId, count: node.signals }] : []),
-        ...(node.missingMetrics ? [{ code: "NODE_METRICS_MISSING", flowContentHash: version.flowContentHash, nodeId: node.nodeId, count: node.missingMetrics }] : [])
+        ...(node.missingMetrics ? [{ code: "NODE_METRICS_MISSING", flowContentHash: version.flowContentHash, nodeId: node.nodeId, count: node.missingMetrics }] : []),
+        ...(node.tokenUsage.missingReceipts ? [{ code: "NODE_TOKEN_USAGE_MISSING", flowContentHash: version.flowContentHash, nodeId: node.nodeId, count: node.tokenUsage.missingReceipts }] : []),
+        ...(node.orchestratorTokenUsage.missingReceipts ? [{ code: "ORCHESTRATOR_TOKEN_USAGE_MISSING", flowContentHash: version.flowContentHash, nodeId: node.nodeId, count: node.orchestratorTokenUsage.missingReceipts }] : [])
       ]),
       ...version.runEvidence.flatMap((evidence) => [
         ...evidence.missingNodeIds.map((nodeId) => ({ code: "NODE_RECEIPT_MISSING", flowContentHash: version.flowContentHash, nodeId, count: 1 })),

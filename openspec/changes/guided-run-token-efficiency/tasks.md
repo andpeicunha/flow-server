@@ -1,0 +1,22 @@
+# Tasks / Tarefas
+
+- [x] [us] Specify versioned report, reuse, schema, and capability-warning contracts in bilingual OpenSpec specs.
+- [x] [pt] Especificar contratos versionados de relatório, reutilização, schema e avisos de capacidade nas specs bilíngues do OpenSpec.
+- [x] [us] Add a run-scoped report store and constrained `flow_report_write` tool with atomic writes and strict size/path/run/node checks.
+- [x] [pt] Adicionar armazenamento de relatórios por run e ferramenta restrita `flow_report_write`, com gravação atômica e validações rígidas de tamanho/caminho/run/nó.
+- [x] [us] Validate report references and hashes during checkpoint; expose report integrity in `flow_audit`; keep inline outputs compatible.
+- [x] [pt] Validar referências e hashes no checkpoint; expor integridade em `flow_audit`; manter compatibilidade com outputs inline.
+- [x] [us] Change prompt construction to pass summaries and report references without embedding full prior reports; retain task-once optimization only if it stays explicit and backward compatible.
+- [x] [pt] Alterar a construção de prompts para passar resumos e referências sem embutir relatórios completos anteriores; otimizar o envio da tarefa uma única vez somente se isso permanecer explícito e compatível.
+- [x] [us] Implement explicit receipt reuse with immutable provenance, context and dependency fingerprints, report copying, and fail-closed invalidation.
+- [x] [pt] Implementar reutilização explícita de receipts com proveniência imutável, fingerprints de contexto e dependências, cópia de relatórios e invalidação fail-closed.
+- [x] [us] Validate optional per-node output schemas at checkpoint.
+- [x] [pt] Validar schemas opcionais de output por nó no checkpoint.
+- [x] [us] Detect and return executor Skill capability warnings without overstating what was loaded.
+- [x] [pt] Detectar e retornar avisos de capacidade de Skills do executor sem afirmar que foram carregadas quando isso não foi confirmado.
+- [x] [us] Document parallel execution of independent ready nodes and the per-node checkpoint/report requirements.
+- [x] [pt] Documentar execução paralela de nós independentes disponíveis e requisitos de checkpoint/relatório por nó.
+- [x] [us] Preserve legacy flow behavior, add required contract and regression coverage, and run repository checks.
+- [x] [pt] Preservar comportamento dos flows antigos, adicionar cobertura de contrato e regressão necessária e executar verificações do repositório.
+- [ ] [us] Record before/after token evidence from comparable representative flow runs; do not claim measured savings until that evidence exists.
+- [ ] [pt] Registrar evidência de tokens antes/depois em runs representativas comparáveis; não afirmar economia medida antes dessa evidência.

@@ -2,12 +2,13 @@ import { createHash } from "node:crypto";
 import { isAlias, parseDocument, visit } from "yaml";
 import { validToolName } from "./flow-tool-policy.js";
 import { FlowError } from "./errors.js";
+import { isValidOutputSchema } from "./output-schema.js";
 
 const identifier = /^[a-z][a-z0-9-]{0,62}$/;
 const nodeIdentifier = /^[a-z][a-z0-9_-]{0,62}$/;
 const safeText = (value, max = 64 * 1024) => typeof value === "string" && value.length <= max;
-const rootKeys = new Set(["schemaVersion", "id", "name", "title", "description", "keepAwake", "route", "routing", "stopWhen", "nodes"]);
-const nodeKeys = new Set(["id", "title", "after", "dependsOn", "agent", "role", "model", "effort", "variant", "executor", "skills", "mcps", "constraints", "prompt", "input", "output", "when", "evidencePolicy", "timeout", "retry", "parallelSafe"]);
+const rootKeys = new Set(["schemaVersion", "id", "name", "title", "description", "keepAwake", "route", "routing", "stopWhen", "nodes", "taskContext"]);
+const nodeKeys = new Set(["id", "title", "after", "dependsOn", "agent", "role", "model", "effort", "variant", "executor", "skills", "mcps", "constraints", "prompt", "input", "output", "outputSchema", "when", "evidencePolicy", "timeout", "retry", "parallelSafe", "reusable", "skillToolSupport"]);
 const stopKeys = new Set(["step", "jsonPath", "equals", "notEquals", "in", "notIn", "status", "next", "mode"]);
 const whenKeys = new Set(["step", "jsonPath", "equals", "notEquals", "in", "notIn"]);
 export const flowDocumentLimits = Object.freeze({ bytes: 256 * 1024, depth: 32, scalarLength: 64 * 1024, collectionLength: 2048, nodes: 256 });
@@ -77,6 +78,7 @@ export function validateFlowDocument(input) {
     && (value.title === undefined || (safeText(value.title, 160) && value.title.length > 0))
     && (value.description === undefined || safeText(value.description, 4000))
     && (value.keepAwake === undefined || safeText(value.keepAwake, 32))
+    && (value.taskContext === undefined || ["repeat", "once"].includes(value.taskContext))
     && (value.routing === undefined || (value.routing && typeof value.routing === "object" && !Array.isArray(value.routing)
       && exactKeys(value.routing, new Set(["when", "avoid", "priority"]))
       && (value.routing.when === undefined || validStringList(value.routing.when, { maxItems: 128, maxLength: 128 }))
@@ -100,13 +102,18 @@ export function validateFlowDocument(input) {
       && !(node.after !== undefined && node.dependsOn !== undefined)
       && (dependencies === undefined || (new Set(dependencies).size === dependencies.length && dependencies.every((id) => nodeIdentifier.test(id))))
       && ["agent", "role", "model", "effort", "variant", "executor", "prompt", "input", "output", "evidencePolicy"].every((key) => node[key] === undefined || safeText(node[key], key === "prompt" || key === "input" ? 64 * 1024 : 4096))
+      && (node.outputSchema === undefined || isValidOutputSchema(node.outputSchema))
       && ["skills", "constraints"].every((key) => node[key] === undefined || validStringList(node[key], { maxItems: 128, maxLength: 4096 }))
       && (node.mcps === undefined || (Array.isArray(node.mcps) && node.mcps.length <= 64 && new Set(node.mcps).size === node.mcps.length && node.mcps.every(validToolName)))
       && (node.when === undefined || validCondition(node.when, whenKeys))
       && (node.timeout === undefined || (Number.isInteger(node.timeout) && node.timeout >= 1 && node.timeout <= 604800))
       && (node.retry === undefined || (Number.isInteger(node.retry) && node.retry >= 0 && node.retry <= 10))
       && (node.parallelSafe === undefined || typeof node.parallelSafe === "boolean");
-    if (!validNode || nodeIds.has(node?.id)) fail("Flow nodes must have unique IDs and valid agent, model, prompt, skill, condition, and dependency fields.");
+    const validNodeExtensions = (node.reusable === undefined || typeof node.reusable === "boolean")
+      && (node.skillToolSupport === undefined || (node.skillToolSupport && typeof node.skillToolSupport === "object" && !Array.isArray(node.skillToolSupport)
+        && exactKeys(node.skillToolSupport, new Set(["codex", "claude"]))
+        && Object.values(node.skillToolSupport).every((value) => typeof value === "boolean")));
+    if (!validNode || !validNodeExtensions || nodeIds.has(node?.id)) fail("Flow nodes must have unique IDs and valid agent, model, prompt, skill, condition, and dependency fields.");
     nodeIds.add(node.id);
   }
 

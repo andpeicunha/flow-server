@@ -29,6 +29,15 @@
         "outputTokens": { "type": "integer", "minimum": 0, "maximum": 1000000000 }
       }
     },
+    "orchestratorTokenUsage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["inputTokens", "outputTokens"],
+      "properties": {
+        "inputTokens": { "type": "integer", "minimum": 0, "maximum": 1000000000 },
+        "outputTokens": { "type": "integer", "minimum": 0, "maximum": 1000000000 }
+      }
+    },
     "skills": {
       "type": "array",
       "maxItems": 32,
@@ -57,6 +66,34 @@
           "affectsRun": { "const": false }
         }
       }
+    },
+    "reusedFrom": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runId", "nodeId", "contextHash"],
+      "properties": {
+        "runId": { "type": "string", "pattern": "^run_[a-z0-9-]{1,63}$" },
+        "nodeId": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,62}$" },
+        "contextHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "output": { "type": "object", "properties": { "reportPath": {}, "reportSha256": {} }, "required": ["reportPath"] } }, "required": ["output"] },
+      "then": { "properties": { "output": {
+        "type": "object",
+        "required": ["reportSha256", "summary"],
+        "properties": {
+          "summary": { "type": "string", "maxLength": 4000 },
+          "reportPath": { "type": "string", "pattern": "^reports/[a-z][a-z0-9_-]{0,62}\\.json$" },
+          "reportSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+        }
+      } } }
+    },
+    {
+      "if": { "properties": { "output": { "type": "object", "properties": { "reportPath": {}, "reportSha256": {} }, "required": ["reportSha256"] } }, "required": ["output"] },
+      "then": { "properties": { "output": { "type": "object", "properties": { "reportPath": {}, "summary": {} }, "required": ["reportPath", "summary"] } } }
+    }
+  ]
 }

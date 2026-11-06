@@ -17,6 +17,7 @@ function help() {
   flow block <run-id> <node-id> --reason "..." [--rate-limit]
   flow switch-runtime <run-id> <node-id> --execution-profile <id> --reason "..." --workspace <path> --worktree-review "..." --reviewed-predecessors
   flow continue <run-id> --reason "..." [--workspace <path> --worktree-review "..." --reviewed-predecessors]
+  flow start --flow <id> --workspace <path> --mode guided [--reuse-from <run-id> --reuse-nodes <id,id,...>]
 
 Rate-limit recovery:
   1. If not already blocked, record a real provider limit with flow block --rate-limit.
@@ -53,7 +54,7 @@ function parse(argumentsList) {
     values[item] = value;
     index += 1;
   }
-  const allowed = new Set(["--state-dir", "--flow", "--profile", "--execution-profile", "--task", "--workspace", "--runtime", "--mode", "--receipt", "--approve-host-adapter", "--last", "--since", "--content-hash", "--compare-versions", "--node", "--reason", "--worktree-review", "--rate-limit", "--reviewed-predecessors"]);
+  const allowed = new Set(["--state-dir", "--flow", "--profile", "--execution-profile", "--task", "--workspace", "--runtime", "--mode", "--receipt", "--approve-host-adapter", "--last", "--since", "--content-hash", "--compare-versions", "--node", "--reason", "--worktree-review", "--rate-limit", "--reviewed-predecessors", "--reuse-from", "--reuse-nodes"]);
   const unexpected = Object.keys(values).find((key) => !allowed.has(key));
   if (unexpected) throw new Error(`Unsupported option: ${unexpected}`);
   return { positional, values };
@@ -201,7 +202,7 @@ async function main() {
       process.exitCode = 2;
       return;
     }
-    const body = { flowId: selection.flowId, profileId: selection.profileId, workspace, ...(runtime ? { runtime } : {}), ...(values["--execution-profile"] ? { executionProfileId: values["--execution-profile"] } : {}), executionMode: mode, ...(values["--task"] ? { task: values["--task"] } : {}) };
+    const body = { flowId: selection.flowId, profileId: selection.profileId, workspace, ...(runtime ? { runtime } : {}), ...(values["--execution-profile"] ? { executionProfileId: values["--execution-profile"] } : {}), executionMode: mode, ...(values["--task"] ? { task: values["--task"] } : {}), ...(values["--reuse-from"] ? { reuseFromRunId: values["--reuse-from"] } : {}), ...(values["--reuse-nodes"] ? { reuseNodeIds: values["--reuse-nodes"].split(",") } : {}) };
     return console.log(JSON.stringify(await request(client, "/v1/runs", { method: "POST", body, mutate: true })));
   }
   const receiptPath = requireOption(values, "--receipt");

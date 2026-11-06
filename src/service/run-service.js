@@ -1,7 +1,9 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { FlowError } from "../core/errors.js";
 import { transitionRun } from "../core/lifecycle.js";
 import { isRfc3339DateTime } from "../core/date-time.js";
+import { fingerprintWorkspace } from "../core/workspace-context.js";
+import { validateOutput } from "../core/output-schema.js";
 import { evaluateCondition, planFlowNext } from "./flow-scheduler.js";
 
 const publicRun = ({ workspace, flowDefinition, fallbackExecutions, executionProfileSnapshot, retry, ...run }) => run;
@@ -22,11 +24,12 @@ function predecessorsOf(flow, nodeId) {
 }
 
 export class RunService {
-  constructor({ stateStore, flowResolver, now = () => new Date().toISOString(), createId = () => `run_${randomUUID()}` } = {}) {
+  constructor({ stateStore, flowResolver, now = () => new Date().toISOString(), createId = () => `run_${randomUUID()}`, getWorkspaceFingerprint = fingerprintWorkspace } = {}) {
     this.stateStore = stateStore;
     this.now = now;
     this.createId = createId;
     this.flowResolver = flowResolver;
+    this.getWorkspaceFingerprint = getWorkspaceFingerprint;
     this.runLocks = new Map();
   }
 
@@ -121,11 +124,22 @@ export class RunService {
     return { runId: id, nodeId, attempt: run.retry.attempt, status: "ready_for_retry" };
   }
 
-  async create({ flowId, profileId, workspace, runtime, executionProfileId, executionMode, task, flowSourceId, flowContentHash, flowGitCommit }) {
+  async create({ flowId, profileId, workspace, runtime, executionProfileId, executionMode, task, flowSourceId, flowContentHash, flowGitCommit, reuseFromRunId, reuseNodeIds }) {
     if (executionProfileId && !this.flowResolver) throw new FlowError("EXECUTION_PROFILE_UNAVAILABLE", "This service cannot resolve execution profiles.");
     const resolved = this.flowResolver ? await this.flowResolver({ flowId, profileId, workspace, runtime, executionProfileId }) : {};
     const selectedRuntime = resolved.runtime ?? runtime;
     if (!["codex", "claude"].includes(selectedRuntime)) throw new FlowError("INVALID_RUN_REQUEST", "A configured or requested runtime is required.");
+    let workspaceFingerprint;
+    try { workspaceFingerprint = await this.getWorkspaceFingerprint(workspace); }
+    catch { workspaceFingerprint = undefined; }
+    if (reuseFromRunId && !workspaceFingerprint) throw new FlowError("REUSE_CONTEXT_UNAVAILABLE", "The destination workspace revision and OpenSpec context could not be verified.");
+    const taskHash = createHash("sha256").update(task ?? "").digest("hex");
+    const flowDefinition = resolved.flowDefinition;
+    const flowIdentityHash = createHash("sha256").update(JSON.stringify(flowDefinition ?? {})).digest("hex");
+    const reuseContextHash = workspaceFingerprint ? createHash("sha256")
+      .update([workspaceFingerprint.contextHash, workspaceFingerprint.openSpecHash, taskHash, flowIdentityHash,
+        resolved.flowContentHash ?? flowContentHash ?? "", resolved.profileId ?? profileId ?? "",
+        resolved.executionProfileId ?? executionProfileId ?? "", resolved.flowGitCommit ?? flowGitCommit ?? "", selectedRuntime].join("\0")).digest("hex") : undefined;
     const run = {
       schemaVersion: "v1",
       id: this.createId(),
@@ -139,6 +153,9 @@ export class RunService {
         availableExecutionProfiles: resolved.availableExecutionProfiles, nodeExecutions: {} } : {}),
       ...(resolved.fallbackExecutions ? { fallbackExecutions: resolved.fallbackExecutions, nodeExecutions: {} } : {}),
       ...(task !== undefined ? { task } : {}),
+      ...(workspaceFingerprint ? { workspaceHead: workspaceFingerprint.head, workspaceContextHash: workspaceFingerprint.contextHash,
+        openSpecHash: workspaceFingerprint.openSpecHash, taskHash, reuseContextHash } : {}),
+      ...(reuseFromRunId ? { reuseFromRunId } : {}),
       workspace,
       runtime: selectedRuntime,
       executionMode,
@@ -146,7 +163,104 @@ export class RunService {
       createdAt: this.now()
     };
     await this.stateStore.writeRun(run);
+    if (reuseFromRunId) {
+      try {
+        run.reusedNodeIds = await this.reuseReceipts(run, reuseFromRunId, reuseNodeIds);
+        await this.stateStore.writeRun(run);
+      } catch (error) {
+        await this.stateStore.removeRun(run.id).catch(() => {});
+        throw error;
+      }
+    }
     return publicRun(run);
+  }
+
+  async reuseReceipts(run, sourceRunId, nodeIds) {
+    if (sourceRunId === run.id) throw new FlowError("REUSE_SOURCE_INVALID", "A run cannot reuse receipts from itself.");
+    if (!Array.isArray(nodeIds) || nodeIds.length < 1 || nodeIds.length > 128 || new Set(nodeIds).size !== nodeIds.length || nodeIds.some((nodeId) => typeof nodeId !== "string" || !/^[a-z][a-z0-9_-]{0,62}$/.test(nodeId))) {
+      throw new FlowError("REUSE_NODES_INVALID", "Select unique node IDs to reuse.");
+    }
+    let source;
+    try { source = await this.stateStore.readRun(sourceRunId); }
+    catch (error) { if (error.code === "ENOENT") throw new FlowError("REUSE_SOURCE_NOT_FOUND", "The source run does not exist."); throw error; }
+    const sameContext = ["completed", "stopped"].includes(source.status)
+      && source.flowId === run.flowId && source.profileId === run.profileId
+      && source.executionProfileId === run.executionProfileId
+      && source.runtime === run.runtime
+      && source.flowContentHash === run.flowContentHash && source.flowGitCommit === run.flowGitCommit
+      && source.taskHash && source.taskHash === run.taskHash
+      && source.workspaceContextHash === run.workspaceContextHash && source.openSpecHash === run.openSpecHash
+      && source.reuseContextHash === run.reuseContextHash;
+    if (!sameContext) throw new FlowError("REUSE_CONTEXT_MISMATCH", "The source run does not match the current code, OpenSpec, task, flow, profile, or workspace context.");
+    const sourceNodes = new Map((source.flowDefinition?.nodes ?? []).map((node) => [node.id, node]));
+    const targetNodes = new Map((run.flowDefinition?.nodes ?? []).map((node) => [node.id, node]));
+    const sourceReceipts = new Map((await this.stateStore.listReceipts(sourceRunId)).map((receipt) => [receipt.nodeId, receipt]));
+    const selected = new Set(nodeIds);
+    for (const nodeId of nodeIds) {
+      const node = sourceNodes.get(nodeId);
+      const receipt = sourceReceipts.get(nodeId);
+      if (!node || !targetNodes.has(nodeId) || node.reusable !== true || receipt?.status !== "completed") {
+        throw new FlowError("REUSE_NODE_INELIGIBLE", `Node ${nodeId} is not an explicitly reusable completed node.`);
+      }
+      const dependencies = predecessorsOf(source.flowDefinition, nodeId);
+      if (dependencies.some((dependency) => !selected.has(dependency) || !sourceReceipts.has(dependency))) {
+        throw new FlowError("REUSE_DEPENDENCIES_INCOMPLETE", `Include every completed predecessor of reusable node ${nodeId}.`);
+      }
+    }
+    const toWrite = [];
+    for (const nodeId of nodeIds) {
+      const original = sourceReceipts.get(nodeId);
+      const receipt = { ...original, runId: run.id, recordedAt: this.now(), attempt: 1,
+        reusedFrom: { runId: sourceRunId, nodeId, contextHash: run.reuseContextHash } };
+      if (original.output?.reportPath && original.output.reportSha256) {
+        const sourceReport = await this.stateStore.readReport(sourceRunId, original.output.reportPath);
+        if (sourceReport.reportSha256 !== original.output.reportSha256) throw new FlowError("REUSE_REPORT_INVALID", `The source report for node ${nodeId} has changed.`);
+        const copied = await this.stateStore.writeReport(run.id, nodeId, sourceReport.report);
+        if (copied.reportSha256 !== original.output.reportSha256) throw new FlowError("REUSE_REPORT_INVALID", `The copied report for node ${nodeId} changed.`);
+        receipt.output = { ...original.output, ...copied };
+      }
+      toWrite.push(receipt);
+    }
+    for (const receipt of toWrite) {
+      this.validateReceiptEvidence(receipt);
+      await this.stateStore.writeReceipt(receipt);
+    }
+    return nodeIds;
+  }
+
+  writeReport(id, nodeId, report) { return this.lockRun(id, () => this.writeReportUnlocked(id, nodeId, report)); }
+
+  async writeReportUnlocked(id, nodeId, report) {
+    const run = await this.stateStore.readRun(id).catch((error) => {
+      if (error.code === "ENOENT") throw new FlowError("RUN_NOT_FOUND", "The requested run does not exist.");
+      throw error;
+    });
+    if (!["created", "running"].includes(run.status)) throw new FlowError("RUN_NOT_ACTIVE", "Reports can only be written during an active run.");
+    const node = run.flowDefinition?.nodes?.find((item) => item.id === nodeId);
+    if (!node) throw new FlowError("NODE_NOT_FOUND", "The node is not in the pinned flow definition.");
+    const receipts = await this.stateStore.listReceipts(id);
+    if (receipts.some((receipt) => receipt.nodeId === nodeId)) throw new FlowError("REPORT_NODE_COMPLETE", "A node with a receipt cannot write or replace its report.");
+    const planned = await this.planNextForRun(run);
+    if (planned.result.status !== "ready" || !planned.result.nodes.some((item) => item.id === nodeId)) throw new FlowError("NODE_NOT_READY", "Only a ready node may write a report.");
+    try { return await this.stateStore.writeReport(id, nodeId, report); }
+    catch (error) { throw new FlowError("INVALID_REPORT", error.message || "The node report could not be stored."); }
+  }
+
+  async readReport(id, nodeId) {
+    try { await this.stateStore.readRun(id); }
+    catch (error) { if (error.code === "ENOENT") throw new FlowError("RUN_NOT_FOUND", "The requested run does not exist."); throw error; }
+    const receipts = await this.stateStore.listReceipts(id).catch((error) => {
+      if (error.code === "ENOENT") throw new FlowError("RUN_NOT_FOUND", "The requested run does not exist.");
+      throw error;
+    });
+    const receipt = receipts.find((item) => item.nodeId === nodeId && ["completed", "failed"].includes(item.status));
+    const output = receipt?.output;
+    if (!output?.reportPath || !output.reportSha256) throw new FlowError("REPORT_NOT_FOUND", "This completed node has no report reference.");
+    let result;
+    try { result = await this.stateStore.readReport(id, output.reportPath); }
+    catch { throw new FlowError("REPORT_INVALID", "The referenced report is missing or invalid."); }
+    if (result.reportSha256 !== output.reportSha256) throw new FlowError("REPORT_HASH_MISMATCH", "The referenced report digest does not match its receipt.");
+    return { runId: id, nodeId, reportPath: output.reportPath, reportSha256: result.reportSha256, report: result.report };
   }
 
   transition(id, action) { return this.lockRun(id, () => this.transitionUnlocked(id, action)); }
@@ -382,6 +496,7 @@ export class RunService {
     if (run.status === "blocked") throw new FlowError("RUN_BLOCKED", `Resolve the block before checkpointing: ${run.block?.reason ?? "unknown reason"}`);
     if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) throw new FlowError("INVALID_RECEIPT", "Receipt must be a JSON object.");
     if (receipt.runId !== id) throw new FlowError("INVALID_RECEIPT", "Receipt runId does not match the target run.");
+    if (receipt.reusedFrom !== undefined) throw new FlowError("INVALID_RECEIPT", "Only flow-server may create a reused receipt.");
     if (run.retry && (receipt.nodeId !== run.retry.nodeId || receipt.attempt !== run.retry.attempt)) {
       throw new FlowError("RETRY_ATTEMPT_REQUIRED", "Checkpoint the pending retry node with its required attempt number first.");
     }
@@ -404,8 +519,22 @@ export class RunService {
         const expectedEffort = selectedExecution?.effort ?? node.effort ?? node.variant;
         if (expectedEffort && receipt.effort !== expectedEffort) throw new FlowError("NODE_EFFORT_MISMATCH", "A completed node must record its configured effort in the receipt.");
       }
+      if (receipt.status === "completed" && node?.outputSchema) {
+        if (receipt.output === undefined) throw new FlowError("OUTPUT_SCHEMA_MISMATCH", "This node requires receipt.output matching its configured outputSchema.");
+        const validation = validateOutput(receipt.output, node.outputSchema);
+        if (!validation.valid) throw new FlowError("OUTPUT_SCHEMA_MISMATCH", `Node output does not match outputSchema at ${validation.path}.`);
+      }
     }
     this.validateReceiptEvidence(receipt);
+    const hasReportPath = typeof receipt.output === "object" && receipt.output !== null && !Array.isArray(receipt.output) && Object.hasOwn(receipt.output, "reportPath");
+    const hasReportHash = typeof receipt.output === "object" && receipt.output !== null && !Array.isArray(receipt.output) && Object.hasOwn(receipt.output, "reportSha256");
+    if (hasReportPath || hasReportHash) {
+      if (!hasReportPath || !hasReportHash) throw new FlowError("INVALID_RECEIPT", "reportPath and reportSha256 must be supplied together.");
+      let report;
+      try { report = await this.stateStore.readReport(id, receipt.output.reportPath); }
+      catch { throw new FlowError("REPORT_INVALID", "The referenced report is missing or invalid."); }
+      if (report.reportSha256 !== receipt.output.reportSha256) throw new FlowError("REPORT_HASH_MISMATCH", "The referenced report digest does not match the stored report.");
+    }
     await this.stateStore.writeReceipt(receipt);
     const hadRetry = Boolean(run.retry);
     if (hadRetry) {
@@ -422,7 +551,7 @@ export class RunService {
   }
 
   validateReceiptEvidence(receipt) {
-    const allowed = new Set(["schemaVersion", "runId", "nodeId", "status", "recordedAt", "summary", "output", "redactions", "attempt", "durationMs", "agent", "runtime", "model", "effort", "tokenUsage", "skills", "validation", "signals"]);
+    const allowed = new Set(["schemaVersion", "runId", "nodeId", "status", "recordedAt", "summary", "output", "redactions", "attempt", "durationMs", "agent", "runtime", "model", "effort", "tokenUsage", "orchestratorTokenUsage", "skills", "validation", "signals", "reusedFrom"]);
     const validBase = receipt && typeof receipt === "object" && !Array.isArray(receipt)
       && Object.keys(receipt).every((key) => allowed.has(key))
       && receipt.schemaVersion === "v1"
@@ -436,6 +565,25 @@ export class RunService {
       let serialized;
       try { serialized = JSON.stringify(receipt.output); } catch { throw new FlowError("INVALID_RECEIPT", "Receipt output must be JSON-safe."); }
       if (serialized === undefined || Buffer.byteLength(serialized) > 64 * 1024) throw new FlowError("INVALID_RECEIPT", "Receipt output must be valid JSON up to 64 KiB.");
+      const hasReportPath = receipt.output && typeof receipt.output === "object" && !Array.isArray(receipt.output) && Object.hasOwn(receipt.output, "reportPath");
+      const hasReportHash = receipt.output && typeof receipt.output === "object" && !Array.isArray(receipt.output) && Object.hasOwn(receipt.output, "reportSha256");
+      if (hasReportPath || hasReportHash) {
+        if (!hasReportPath || !hasReportHash || typeof receipt.output.reportPath !== "string"
+          || !/^reports\/[a-z][a-z0-9_-]{0,62}\.json$/.test(receipt.output.reportPath)
+          || typeof receipt.output.reportSha256 !== "string" || !/^[a-f0-9]{64}$/.test(receipt.output.reportSha256)
+          || typeof receipt.output.summary !== "string" || receipt.output.summary.length > 4000 || Buffer.byteLength(serialized) > 8 * 1024) {
+          throw new FlowError("INVALID_RECEIPT", "Referenced report outputs require a bounded summary, valid path, and SHA-256 digest.");
+        }
+      }
+    }
+    if (receipt.reusedFrom !== undefined) {
+      const reusedFrom = receipt.reusedFrom;
+      const valid = reusedFrom && typeof reusedFrom === "object" && !Array.isArray(reusedFrom)
+        && Object.keys(reusedFrom).length === 3 && Object.keys(reusedFrom).every((key) => ["runId", "nodeId", "contextHash"].includes(key))
+        && typeof reusedFrom.runId === "string" && /^run_[a-z0-9-]{1,63}$/.test(reusedFrom.runId)
+        && typeof reusedFrom.nodeId === "string" && /^[a-z][a-z0-9_-]{0,62}$/.test(reusedFrom.nodeId)
+        && typeof reusedFrom.contextHash === "string" && /^[a-f0-9]{64}$/.test(reusedFrom.contextHash);
+      if (!valid) throw new FlowError("INVALID_RECEIPT", "Receipt reuse provenance is invalid.");
     }
     if (receipt.redactions !== undefined && (!Number.isInteger(receipt.redactions) || receipt.redactions < 0)) throw new FlowError("INVALID_RECEIPT", "Receipt redactions is invalid.");
     if (receipt.attempt !== undefined && (!Number.isInteger(receipt.attempt) || receipt.attempt < 1 || receipt.attempt > 100)) throw new FlowError("INVALID_RECEIPT", "Receipt attempt must be from 1 to 100.");
@@ -444,13 +592,13 @@ export class RunService {
     if (receipt.runtime !== undefined && !["codex", "claude"].includes(receipt.runtime)) throw new FlowError("INVALID_RECEIPT", "Receipt runtime is invalid.");
     if (receipt.model !== undefined && (typeof receipt.model !== "string" || receipt.model.length > 256)) throw new FlowError("INVALID_RECEIPT", "Receipt model is invalid.");
     if (receipt.effort !== undefined && !["low", "medium", "high", "xhigh", "max", "ultra"].includes(receipt.effort)) throw new FlowError("INVALID_RECEIPT", "Receipt effort is invalid.");
-    if (receipt.tokenUsage !== undefined) {
-      const usage = receipt.tokenUsage;
+    for (const usageField of ["tokenUsage", "orchestratorTokenUsage"]) if (receipt[usageField] !== undefined) {
+      const usage = receipt[usageField];
       const valid = usage && typeof usage === "object" && !Array.isArray(usage)
         && Object.keys(usage).length === 2
         && Object.keys(usage).every((key) => ["inputTokens", "outputTokens"].includes(key))
         && [usage.inputTokens, usage.outputTokens].every((value) => Number.isInteger(value) && value >= 0 && value <= 1_000_000_000);
-      if (!valid) throw new FlowError("INVALID_RECEIPT", "Receipt tokenUsage is invalid.");
+      if (!valid) throw new FlowError("INVALID_RECEIPT", `Receipt ${usageField} is invalid.`);
     }
     if (receipt.skills !== undefined && (!Array.isArray(receipt.skills) || receipt.skills.length > 32 || receipt.skills.some((skill) => typeof skill !== "string" || skill.length > 128))) throw new FlowError("INVALID_RECEIPT", "Receipt skills are invalid.");
     if (receipt.validation !== undefined) {
@@ -514,11 +662,22 @@ export class RunService {
     } else if (result.status === "done") {
       run = { ...run, status: transitionRun(run.status, "complete") };
       await this.stateStore.writeRun(run);
-    } else if (result.status === "ready" && (run.fallbackExecutions || run.executionProfileSnapshot)) {
+    } else if (result.status === "ready") {
       let changed = false;
-      for (const node of result.nodes) if (!run.nodeExecutions[node.id]) {
-        run.nodeExecutions[node.id] = { runtime: run.runtime, model: node.model, effort: node.effort ?? node.variant ?? "medium",
-          attempt: 1, selectedAt: this.now() };
+      if (run.fallbackExecutions || run.executionProfileSnapshot) {
+        for (const node of result.nodes) if (!run.nodeExecutions[node.id]) {
+          run.nodeExecutions[node.id] = { runtime: run.runtime, model: node.model, effort: node.effort ?? node.variant ?? "medium",
+            attempt: 1, selectedAt: this.now() };
+          changed = true;
+        }
+      }
+      run.skillCapabilityWarnings ??= {};
+      for (const node of result.nodes) if (node.skillWarnings?.length) {
+        run.skillCapabilityWarnings[node.id] = node.skillWarnings;
+        changed = true;
+      }
+      if (run.flowDefinition?.taskContext === "once" && !run.taskContextDelivered) {
+        run.taskContextDelivered = true;
         changed = true;
       }
       if (changed) await this.stateStore.writeRun(run);
@@ -554,9 +713,17 @@ export class RunService {
     const run = await this.stateStore.readRun(id);
     const receipts = await this.stateStore.listReceipts(id);
     const retryHistory = this.stateStore.listArchivedReceipts ? await this.stateStore.listArchivedReceipts(id) : [];
+    const reportFindings = [];
+    for (const receipt of receipts) {
+      const output = receipt.output;
+      if (!output?.reportPath || !output.reportSha256) continue;
+      const integrity = await this.stateStore.verifyReport(id, output.reportPath, output.reportSha256);
+      if (!integrity.valid) reportFindings.push({ code: integrity.code, nodeId: receipt.nodeId, reportPath: output.reportPath });
+    }
     const findings = receipts
       .filter((receipt) => receipt.status === "failed")
       .map((receipt) => ({ code: "NODE_FAILED", nodeId: receipt.nodeId }));
+    findings.push(...reportFindings);
     if (!run.flowDefinition?.nodes) findings.push({ code: "FLOW_DEFINITION_MISSING" });
     else {
       const recorded = new Set(receipts.map((receipt) => receipt.nodeId));
@@ -571,6 +738,8 @@ export class RunService {
     const result = run.status === "failed" || receipts.some((receipt) => receipt.status === "failed") ? "failed"
       : run.status === "completed" && run.flowDefinition?.nodes && findings.length === 0 ? "passed" : "incomplete";
     return { schemaVersion: "v1", runId: id, result, findings,
+      ...(run.skillCapabilityWarnings && Object.keys(run.skillCapabilityWarnings).length ? { warnings: Object.entries(run.skillCapabilityWarnings).flatMap(([nodeId, items]) => items.map((item) => ({ nodeId, ...item }))) } : {}),
+      ...(receipts.some((receipt) => receipt.reusedFrom) ? { reusedReceipts: receipts.filter((receipt) => receipt.reusedFrom).map((receipt) => ({ nodeId: receipt.nodeId, ...receipt.reusedFrom })) } : {}),
       ...(run.executionHistory?.length ? { executionHistory: run.executionHistory } : {}),
       ...(run.blockHistory?.length ? { blockHistory: run.blockHistory } : {}),
       ...(retryHistory.length ? { retryHistory: retryHistory.map((receipt) => ({ nodeId: receipt.nodeId, attempt: receipt.attempt ?? 1, status: receipt.status,

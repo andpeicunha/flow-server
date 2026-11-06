@@ -13,6 +13,13 @@
     "flowSourceId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$" },
     "flowContentHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "flowGitCommit": { "type": "string", "pattern": "^[a-f0-9]{40,64}$" },
+    "workspaceHead": { "type": "string", "pattern": "^[a-f0-9]{40,64}$" },
+    "workspaceContextHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "openSpecHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "taskHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "reuseContextHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "reuseFromRunId": { "type": "string", "pattern": "^run_[a-z0-9-]{1,63}$" },
+    "reusedNodeIds": { "type": "array", "maxItems": 128, "items": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,62}$" } },
     "task": { "type": "string", "maxLength": 65536 },
     "runtime": { "enum": ["codex", "claude"] },
     "executionProfileId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$" },
@@ -24,7 +31,9 @@
     "blockHistory": { "type": "array", "items": { "type": "object" } },
     "nodeExecutions": { "type": "object", "additionalProperties": { "type": "object" } },
     "executionHistory": { "type": "array", "items": { "type": "object" } },
-    "stop": { "type": "object" }
+    "stop": { "type": "object" },
+    "taskContextDelivered": { "type": "boolean" },
+    "skillCapabilityWarnings": { "type": "object", "additionalProperties": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["code", "reason"], "properties": { "code": { "type": "string" }, "reason": { "type": "string" } } } } }
   },
   "allOf": [{ "if": { "required": ["flowSourceId"] }, "then": { "required": ["profileId"] } }]
 }

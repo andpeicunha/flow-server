@@ -66,9 +66,11 @@ export class LocalFlowClient {
     } });
   }
   next(runId) { return this.request(`/v1/runs/${encodeURIComponent(runId)}/next`, { method: "POST", mutate: true, body: {} }); }
+  writeReport(runId, nodeId, report) { return this.request(`/v1/runs/${encodeURIComponent(runId)}/reports/${encodeURIComponent(nodeId)}`, { method: "POST", mutate: true, body: { report } }); }
+  readReport(runId, nodeId) { return this.request(`/v1/runs/${encodeURIComponent(runId)}/reports/${encodeURIComponent(nodeId)}`, { privateRead: true }); }
   lifecycle(runId, action) { return this.request(`/v1/runs/${encodeURIComponent(runId)}/lifecycle`, { method: "POST", mutate: true, body: { action } }); }
-  startGuided({ flowId, profileId, workspace, runtime, executionProfileId, task }) {
-    return this.request("/v1/runs", { method: "POST", mutate: true, body: { flowId, ...(profileId ? { profileId } : {}), workspace, ...(runtime ? { runtime } : {}), ...(executionProfileId ? { executionProfileId } : {}), executionMode: "guided", ...(task !== undefined ? { task } : {}) } });
+  startGuided({ flowId, profileId, workspace, runtime, executionProfileId, task, reuseFromRunId, reuseNodeIds }) {
+    return this.request("/v1/runs", { method: "POST", mutate: true, body: { flowId, ...(profileId ? { profileId } : {}), workspace, ...(runtime ? { runtime } : {}), ...(executionProfileId ? { executionProfileId } : {}), executionMode: "guided", ...(task !== undefined ? { task } : {}), ...(reuseFromRunId ? { reuseFromRunId } : {}), ...(reuseNodeIds ? { reuseNodeIds } : {}) } });
   }
   checkpoint(runId, receipt) {
     return this.request(`/v1/runs/${encodeURIComponent(runId)}/checkpoint`, { method: "POST", mutate: true, body: { receipt } });
