@@ -140,6 +140,16 @@ export class FlowSourceService {
     const source = this.sources.find((item) => item.id === entry.sourceId);
     const execution = source?.execution;
     const profiles = execution?.profiles ?? [];
+    if (selection.discoverExecutionProfiles) {
+      if (!selection.flowSourceId || !selection.flowContentHash || !workspace || selected.flowId !== flowId || selected.profileId !== profileId || entry.sourceId !== selection.flowSourceId) {
+        throw new FlowError("FLOW_SOURCE_MISMATCH", "The run's pinned flow and source identity could not be verified.");
+      }
+      if (entry.contentHash !== selection.flowContentHash) throw new FlowError("FLOW_CONTENT_CHANGED", "The flow source changed after this run started.");
+      if (source.workspaceRoots.length && await this.profileForWorkspace(workspace) !== source.id) {
+        throw new FlowError("RETRY_WORKSPACE_MISMATCH", "The pinned workspace no longer belongs to this flow source.");
+      }
+      return { candidates: profiles.map(({ id, name, runtime }) => ({ id, name, runtime })) };
+    }
     let executionProfile;
     if (profiles.length) {
       const requestedId = executionProfileId ?? execution.defaultProfileId ?? (profiles.length === 1 ? profiles[0].id : undefined);

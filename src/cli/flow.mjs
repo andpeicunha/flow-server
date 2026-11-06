@@ -22,7 +22,7 @@ function help() {
 Rate-limit recovery:
   1. If not already blocked, record a real provider limit with flow block --rate-limit.
   2. Confirm status, RATE_LIMIT reason, and pending node with flow inspect.
-  3. Run flow retry-inspect for that node. Check availableExecutionProfiles,
+  3. Run flow retry-inspect for that node. Check availableExecutionProfiles and currentSourceExecutionProfiles (current source, not pinned),
      selectedExecution, every predecessor receipt, otherFailures, retryPending,
      and the actual pinned worktree for partial changes.
   4. When another execution profile is available, select it with

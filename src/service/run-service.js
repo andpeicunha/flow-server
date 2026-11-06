@@ -69,7 +69,10 @@ export class RunService {
     if (!node) throw new FlowError("NODE_NOT_FOUND", "The node is not in the pinned flow definition.");
     const receipts = await this.stateStore.listReceipts(id);
     const predecessors = predecessorsOf(run.flowDefinition, nodeId);
+    const currentSourceExecutionProfiles = !run.executionProfileSnapshot && !run.executionProfileId && this.flowResolver && run.flowSourceId && run.flowContentHash && run.block?.reason === "RATE_LIMIT"
+      ? await this.currentSourceProfiles(run) : undefined;
     return {
+      ...(currentSourceExecutionProfiles ? { currentSourceExecutionProfiles } : {}),
       runId: id, nodeId, runStatus: run.status, workspace: run.workspace,
       ...(run.executionProfileId ? { executionProfileId: run.executionProfileId } : {}),
       ...(run.availableExecutionProfiles ? { availableExecutionProfiles: run.availableExecutionProfiles } : {}),
@@ -81,6 +84,12 @@ export class RunService {
       retryPending: run.retry?.nodeId === nodeId,
       history: (await this.stateStore.listArchivedReceipts(id)).filter((item) => item.nodeId === nodeId)
     };
+  }
+
+  async currentSourceProfiles(run) {
+    const result = await this.flowResolver({ flowId: run.flowId, profileId: run.profileId, workspace: run.workspace,
+      flowSourceId: run.flowSourceId, flowContentHash: run.flowContentHash, discoverExecutionProfiles: true });
+    return result.candidates ?? [];
   }
 
   retryNode(id, review) { return this.lockRun(id, () => this.retryNodeUnlocked(id, review ?? {})); }
@@ -288,7 +297,12 @@ export class RunService {
   async switchNodeUnlocked(id, { nodeId, executionProfileId, reason, workspace, worktreeReview, reviewedPredecessors } = {}) {
     const run = await this.stateStore.readRun(id);
     if (executionProfileId) return this.switchExecutionProfileUnlocked(run, { nodeId, executionProfileId, reason, workspace, worktreeReview, reviewedPredecessors });
-    if (!run.fallbackExecutions?.[nodeId]) throw new FlowError("FALLBACK_NOT_CONFIGURED", "This run has no configured fallback for the node.");
+    if (!run.fallbackExecutions?.[nodeId]) {
+      const candidates = run.executionProfileSnapshot ? (run.availableExecutionProfiles ?? []).filter(({ id }) => id !== run.executionProfileId)
+        : this.flowResolver ? await this.currentSourceProfiles(run) : [];
+      if (candidates.length) throw new FlowError("EXECUTION_PROFILE_REQUIRED", `Choose an execution profile: ${candidates.map(({ id, runtime }) => `${id} (${runtime})`).join(", ")}.`);
+      throw new FlowError("FALLBACK_NOT_CONFIGURED", "This run has no configured fallback for the node.");
+    }
     if (run.status !== "blocked" || run.block?.reason !== "RATE_LIMIT" || run.block.nodeId !== nodeId) {
       throw new FlowError("FALLBACK_NOT_BLOCKED", "Switch only the node blocked by a provider rate limit.");
     }
@@ -332,6 +346,7 @@ export class RunService {
       throw new FlowError("CONTINUE_REVIEW_REQUIRED", "Review the pinned worktree and completed predecessors before switching execution profiles.");
     }
     if (!this.flowResolver) throw new FlowError("EXECUTION_PROFILE_UNAVAILABLE", "This service cannot resolve execution profiles.");
+    if (!run.executionProfileSnapshot) await this.currentSourceProfiles(run);
     const resolved = await this.flowResolver({ flowId: run.flowId, profileId: run.profileId, workspace: run.workspace, executionProfileId });
     if (resolved.flowContentHash && run.flowContentHash && resolved.flowContentHash !== run.flowContentHash) {
       throw new FlowError("FLOW_CONTENT_CHANGED", "The flow source changed after this run started. The execution profile was not switched.");
@@ -350,8 +365,11 @@ export class RunService {
       throw new FlowError("RETRY_PREDECESSOR_UNSAFE", "Review every completed predecessor before switching execution profiles.");
     }
     if (receipts.some((item) => item.nodeId === nodeId)) throw new FlowError("FALLBACK_RECEIPT_EXISTS", "The blocked node already has a receipt.");
-    const oldSelection = run.nodeExecutions?.[nodeId];
+    const plannedBeforeSwitch = planFlowNext(run.flowDefinition, run, receipts);
+    if (plannedBeforeSwitch.status !== "ready" || !plannedBeforeSwitch.nodes.some((item) => item.id === nodeId)) throw new FlowError("BLOCK_NODE_NOT_READY", "The pending node is no longer ready.");
     const node = run.flowDefinition.nodes.find((item) => item.id === nodeId);
+    const oldSelection = run.nodeExecutions?.[nodeId] ?? (!run.executionProfileSnapshot && node && run.runtime
+      ? { runtime: run.runtime, model: node.model, effort: node.effort ?? node.variant ?? "medium", attempt: 1 } : undefined);
     if (!node || !oldSelection) throw new FlowError("FALLBACK_SELECTION_CHANGED", "Inspect the selected node execution before switching.");
     const attempt = oldSelection.attempt ?? 1;
     if (attempt > (node.retry ?? 3)) throw new FlowError("RETRY_LIMIT_REACHED", "This node has reached its configured retry limit.");
@@ -363,6 +381,7 @@ export class RunService {
     run.executionProfileSnapshot = resolved.executionProfileSnapshot;
     run.availableExecutionProfiles = resolved.availableExecutionProfiles;
     delete run.fallbackExecutions;
+    run.nodeExecutions ??= {};
     for (const pending of resolved.flowDefinition.nodes) {
       if (receipts.some((item) => item.nodeId === pending.id)) continue;
       run.nodeExecutions[pending.id] = {
