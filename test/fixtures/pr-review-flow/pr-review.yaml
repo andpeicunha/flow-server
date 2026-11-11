@@ -1,0 +1,932 @@
+name: flow-pr-review
+description: Pravaler PR review proporcional ao impacto de negócio (triagem de risco com tiers), read-only, com Skills por superfície, triagem humana dos achados, validação cética, rascunhos de comentários aprovados pelo usuário e publicação do review com guarda de head e aprovação explícita
+routing:
+  when: [pr, pull request, review, revisar, revise, revisão, analise, analisar, diff]
+  avoid: [implement, sdd]
+  priority: 30
+
+stopWhen:
+  - step: repo_preflight
+    jsonPath: status
+    notEquals: pass
+    status: wrong_repo_or_flow
+    next: switch to a Pravaler repo or provide PR/repo details
+  - step: review_findings_backend_standard
+    jsonPath: status
+    notEquals: pass
+    status: needs_review_resolution
+    mode: block
+    next: 'inspecione o receipt degradado de review_findings_backend_standard; após resolver a causa rode flow_continue (re-executa o nó); não aceite resultado degradado como review'
+  - step: review_findings_backend_deep
+    jsonPath: status
+    notEquals: pass
+    status: needs_review_resolution
+    mode: block
+    next: 'inspecione o receipt degradado de review_findings_backend_deep; após resolver a causa rode flow_continue (re-executa o nó); não aceite resultado degradado como review'
+  - step: review_findings_frontend_standard
+    jsonPath: status
+    notEquals: pass
+    status: needs_review_resolution
+    mode: block
+    next: 'inspecione o receipt degradado de review_findings_frontend_standard; após resolver a causa rode flow_continue (re-executa o nó); não aceite resultado degradado como review'
+  - step: review_findings_frontend_deep
+    jsonPath: status
+    notEquals: pass
+    status: needs_review_resolution
+    mode: block
+    next: 'inspecione o receipt degradado de review_findings_frontend_deep; após resolver a causa rode flow_continue (re-executa o nó); não aceite resultado degradado como review'
+  - step: review_findings_design_system_standard
+    jsonPath: status
+    notEquals: pass
+    status: needs_review_resolution
+    mode: block
+    next: 'inspecione o receipt degradado de review_findings_design_system_standard; após resolver a causa rode flow_continue (re-executa o nó); não aceite resultado degradado como review'
+  - step: review_findings_design_system_deep
+    jsonPath: status
+    notEquals: pass
+    status: needs_review_resolution
+    mode: block
+    next: 'inspecione o receipt degradado de review_findings_design_system_deep; após resolver a causa rode flow_continue (re-executa o nó); não aceite resultado degradado como review'
+  - step: risk_triage
+    jsonPath: status
+    notEquals: pass
+    status: needs_triage_data
+    mode: block
+    next: 'inspecione o receipt de risk_triage (campo missing); após fornecer o dado que falta rode flow_continue (re-executa o nó)'
+  - step: review_closeout
+    jsonPath: headCheck
+    notEquals: current
+    status: stale_head
+    next: 'rode o flow-pr-review de novo no head atual'
+  # publish_review: o prompt devolve blockedReason em todo receipt completed (none|head_changed|transient_error).
+  # head_changed e terminal (stop). transient_error (falha transitoria do gh, nada publicado) vira block:
+  # flow_continue re-executa o no. Se o no gravar receipt failed, o servidor ja bloqueia por
+  # NODE_FAILED/DEPENDENCY_FAILED e o caminho e flow_retry_node; stopWhen nao e avaliado nesse caso.
+  - step: publish_review
+    jsonPath: blockedReason
+    equals: head_changed
+    status: head_changed_before_publish
+    next: 'o head do PR mudou antes da publicacao; nada foi publicado; rode o flow-pr-review de novo no head atual'
+  - step: publish_review
+    jsonPath: blockedReason
+    equals: transient_error
+    status: publish_transient_error
+    mode: block
+    next: 'inspecione o receipt (nada foi publicado); apos resolver a causa do erro do gh rode flow_continue (re-executa o no)'
+
+nodes:
+  - id: repo_preflight
+    agent: explorer
+    model: anthropic/claude-haiku-5-5
+    variant: low
+    executor: cli-session
+    output: Confirm the Pravaler worktree and review surface.
+    prompt: |
+      Faça preflight read-only somente no workspace alvo informado pelo runner.
+      O diretório de invocação pode ser diferente. Tarefa: {{task}}
+      Verifique marcadores locais Pravaler sem editar arquivos:
+      - Backend NestJS (Clean Architecture): package.json + src/domain/, src/application/, src/infrastructure/ (ex.: auth-service, lead-service, proposal-service, orch-service, lib-logger).
+      - Frontend MFE (Vite + Module Federation): vite.config.ts + dependência @module-federation/vite + src/ (ex.: pip-core, pip-fin-fundos, pip-fin-fundos-v2).
+      - Frontend Next.js: next.config.* + src/ ou app/ (ex.: canais-front, descoberta-pdp-frontend).
+      - Design System (Turbo+PNPM monorepo): turbo.json + pnpm-workspace.yaml + pacotes @pravaler/prv-ds* (tokens, ícones, componentes). Exemplo: prv-design-system.
+      Não troque de worktree e não edite arquivos.
+      Use status=blocked somente se os marcadores forem insuficientes; caso contrário use pass.
+      Não explique o raciocínio. Retorne somente este objeto JSON entre os marcadores exigidos:
+      { "status": "pass|blocked", "repoType": "backend|frontend-mfe|frontend-nextjs|design-system|unknown", "reason": "...", "missing": [] }
+
+  - id: pr_intake
+    after: [repo_preflight]
+    agent: oracle
+    model: anthropic/claude-sonnet-5-5
+    variant: low
+    executor: cli-session
+    output: Identify PR, base/head, declared scope, existing review comments, and cross-repo dependencies.
+    prompt: |
+      Colete intake do PR sem editar arquivos.
+      Tarefa: {{task}}
+      Superfície: {{step.repo_preflight}}
+      Identifique PR/base/head, objetivo, arquivos/áreas prováveis, critérios de aceite,
+      dependências do outro repositório e dados faltantes.
+      Leia os comentários já existentes somente para saber o que já foi dito e não duplicar achados:
+      - gh api repos/<owner>/<repo>/pulls/<N>/comments (comentários inline)
+      - gh api repos/<owner>/<repo>/issues/<N>/comments (comentários gerais)
+      - gh api repos/<owner>/<repo>/pulls/<N>/reviews (apenas corpos NÃO vazios de reviews)
+      NÃO registre nem reporte estados de review, approves, nomes de quem já revisou/aprovou, contagens ou reviews vazios; isso é irrelevante e não deve influenciar a análise nem os riscos.
+      Registre `state` da PR (OPEN|MERGED|CLOSED). PR já mergeada ou fechada continua sendo revisada normalmente; apenas registre o estado, não bloqueie.
+      Registre `headRefOid` (SHA do head atual), `author` (login do autor do PR) e
+      `existingComments` (resumo curto do conteúdo: path/linha/tema de cada comentário).
+      Retorne JSON com status, pr, state (OPEN|MERGED|CLOSED), headRefOid, author, scope, affectedRepos, existingComments,
+      missing, risks e next.
+
+  - id: diff_recon
+    after: [pr_intake]
+    agent: oracle
+    model: anthropic/claude-sonnet-5-5
+    variant: low
+    executor: cli-session
+    output: Recon the diff and classify review risks without editing.
+    prompt: |
+      Analise diff/status/arquivos relevantes de forma read-only.
+      Tarefa: {{task}}
+      Intake: {{step.pr_intake}}
+      Classifique impacto em contrato, segurança, performance e escopo.
+      Liste em `qualitySignals` os arquivos de produção com mais linhas adicionadas, os módulos novos e
+      se o diff toca API pública de pacote publicado.
+      Retorne somente JSON válido:
+      { "status": "pass|blocked", "summary": "...", "repoType": "backend|frontend-mfe|frontend-nextjs|design-system", "contractImpact": true, "securityImpact": true, "performanceImpact": true, "affectedAreas": [], "qualitySignals": { "largestFiles": [{"path":"...","addedLines":0}], "newModules": [], "publicApiTouched": false }, "risks": [], "filesReviewed": [], "commandsRun": [], "next": "continue|stop" }
+
+  - id: risk_triage
+    after: [diff_recon]
+    agent: oracle
+    model: anthropic/claude-haiku-5-5
+    variant: low
+    executor: cli-session
+    output: Classify the PR tier by business impact and choose the review route.
+    prompt: |
+      Classifique o PR por IMPACTO DE NEGÓCIO, não por tamanho. Read-only.
+      Tarefa: {{task}}
+      Intake: {{step.pr_intake}}
+      Recon: {{step.diff_recon}}
+      Sinais de negócio (qualquer um força tier >= medium): toca proposta, jornada, contrato,
+      financiamento, pagamento, garantidor, oferta/SKU; muda status/transições ou executa ação
+      irreversível; altera contrato de API, eventos Pub/Sub ou migration; mexe em auth/segurança,
+      config de deploy ou lib compartilhada; afeta vários consumidores.
+      Tamanho (linhas/arquivos) é só sinal secundário; ignore lockfile, openspec e docs na contagem.
+      Sinais de alto impacto => tier high: ação irreversível, dinheiro, auth, migration em tabela
+      grande, contrato público ou evento consumido por outros serviços.
+      Sem sinais de negócio e com diff pequeno/localizado => low.
+      Superfície: backend (repoType backend), frontend (frontend-mfe e frontend-nextjs) ou design-system.
+      `route` = "<surface>-<tier>" (ex.: backend-low, frontend-medium, design-system-high).
+      Ignore quem já aprovou/revisou a PR e quantos approves existem; revise o diff de forma independente e considere apenas o conteúdo dos comentários existentes.
+      status=blocked SOMENTE quando falta dado para classificar (intake/recon ausente, vazio ou ilegível,
+      superfície indeterminável); liste o que falta em `missing`. Risco incerto NÃO é blocked: classifique pelo
+      sinal mais forte (na dúvida, tier maior). status=pass EXIGE `route`, `tier` e `surface`; o receipt sem
+      eles é rejeitado.
+      Retorne somente JSON válido:
+      { "status": "pass|blocked", "tier": "low|medium|high", "surface": "backend|frontend|design-system", "route": "<surface>-<tier>", "businessSignals": [], "reasons": [], "sizeNote": "...", "missing": [] }
+    outputSchema:
+      type: object
+      required: [status]
+      properties:
+        status: { enum: [pass, blocked] }
+        tier: { enum: [low, medium, high] }
+        surface: { enum: [backend, frontend, design-system] }
+        route: { type: string, pattern: "^(backend|frontend|design-system)-(low|medium|high)$" }
+        missing: { type: array, items: { type: string } }
+      if:
+        properties: { status: { const: pass } }
+        required: [status]
+      then:
+        properties: { route: { type: string }, tier: { type: string }, surface: { type: string } }
+        required: [route, tier, surface]
+
+  - id: review_findings_backend_standard
+    after: [diff_recon, risk_triage]
+    when: { step: risk_triage, jsonPath: route, in: [backend-low, backend-medium] }
+    agent: test-auditor
+    model: anthropic/claude-sonnet-5-5
+    variant: medium
+    executor: cli-session
+    skills: [prv-review-guidelines, review-confidence, test-evidence-audit, minimal-solution-review]
+    constraints:
+      - Operar estritamente read-only.
+      - Não declarar comandos executados sem registrá-los no receipt estruturado.
+      - Se o modelo ficar indisponível, tentar retry bounded e modelo compatível alternativo.
+      - No Codex, usar codex-multi-auth somente se essa capacidade estiver disponível.
+      - Se todos os fallbacks falharem, retornar status=degraded e reducedConfidence=true.
+      - 'degraded SOMENTE para falha de modelo/ferramenta. Teste, suíte ou mutação não executados NÃO são degraded: status=pass, reducedConfidence=true e missingEvidence[] com o motivo de cada item.'
+    output: Review backend findings using the applicable Skills.
+    prompt: |
+      Revise este PR backend usando as Skills carregadas, sem editar arquivos.
+      Tarefa: {{task}}
+      Intake: {{step.pr_intake}}
+      Recon: {{step.diff_recon}}
+      Triagem de risco: {{step.risk_triage}}
+      Antes de revisar, leia quando existirem no repositório: openspec/project.md, openspec/changes/
+      (mudanças recentes relevantes ao diff), docs/adrs/ ou adrs/ (ADRs aplicáveis às áreas tocadas
+      pelo diff), docs/guidelines/. Não é obrigatório ler tudo — priorize o que for relevante ao
+      escopo do diff.
+      Cubra limites de domínio, persistência, HTTP/DTOs, contratos front-back,
+      segurança, performance, escopo e testes. Não transforme regras da Skill em checklist
+      artificial: aplique somente o que for relevante ao diff.
+      Regras de qualidade dos achados:
+      - Confiança: aplique review-confidence. Só vira finding com confiança >= 80; o restante vai para `nits`.
+      - Severidade P0..P3 pelo que a falha FAZ (cenário de falha concreto), nunca por querer ou não o merge.
+      - Falha que já existia na base (não introduzida pelo diff): marque `preexisting: true`.
+      - FILTRO DE RUÍDO — não reporte: checklist/evidência vazia da descrição do PR, ordem de merge/deploy,
+        nome de branch, casos de borda improváveis, animação/estética menor, dependências de backend,
+        e pontos baseados só na descrição da PR sem evidência no código.
+      - Cada finding tem id estável F1..Fn, `confidence` (0-100), `anchor` {path, line, side: "RIGHT"}
+        dentro de um hunk do diff quando houver, `failureScenario` (cenário concreto; em achado de
+        desenho, `cost` e `minimalAlternative`) e `suggestion`
+        (inclua na `recommendation`; use `suggestion` como trecho/ação curta).
+      - Não duplique o que já está em `existingComments` do intake (comentários/reviews existentes).
+      Ignore quem já aprovou/revisou a PR e quantos approves existem; revise o diff de forma independente e considere apenas o conteúdo dos comentários existentes.
+      DESENHO DA SOLUÇÃO: aplique ao diff os seis critérios da Skill minimal-solution-review (invariante
+      existente, custo de cada peça nova, alternativa mínima, mitigação de efeito colateral, casos
+      equivalentes, change OpenSpec). Achado de desenho usa `kind: "design"`: no lugar de
+      `failureScenario`, preencha `cost` e `minimalAlternative`; confiança >= 80 exige `arquivo:linha`
+      da garantia existente ou da alternativa; severidade no máximo P2. Os demais achados usam
+      `kind: "defect"`. Guarda fail-closed em fronteira de segurança (authz, identidade, origem, limites)
+      nunca é redundância. Registre `changeCheck` conforme a Skill; sem ele o review é INCOMPLETO.
+      Forma do código (tamanho, duplicação, nomes, tipos) é de outro nó: não reporte aqui.
+      EVIDÊNCIA NÃO EXECUTADA: este nó é read-only. Se não rodou suíte/teste/mutação (ou não pôde), isso NÃO é degraded:
+      retorne status=pass, reducedConfidence=true e liste cada item em `missingEvidence` como
+      {"item":"...","reason":"..."} (ex.: "mutação do guard X", "reason": "nó read-only"). Use status=degraded
+      somente se o modelo ou uma ferramenta essencial falhou e não há findings utilizáveis.
+      Carregue as Skills declaradas: use a ferramenta Skill se estiver disponível; caso contrário, leia o SKILL.md (e references/ quando existir) em ~/.agents/skills/<nome>/ ou ~/.claude/skills/<nome>/ e aplique ao diff.
+      Retorne somente JSON válido:
+      { "status": "pass|degraded", "reducedConfidence": false, "findings": [{"id":"F1","kind":"defect|design","severity":"P0|P1|P2|P3","confidence":0,"title":"...","evidence":"...","failureScenario":"...","cost":"...","minimalAlternative":"...","impact":"...","recommendation":"...","suggestion":"...","anchor":{"path":"...","line":0,"side":"RIGHT"},"preexisting":false}], "nits": [], "changeCheck": {"required":false,"found":"openspec/changes/<id>|none|n/a","reason":"..."},"commandsRun": [{"command":"...","result":"passed|failed","evidence":"..."}], "missingEvidence": [{"item":"...","reason":"..."}], "risks": [], "next": "continue|stop" }
+
+  - id: review_findings_backend_deep
+    after: [diff_recon, risk_triage]
+    when: { step: risk_triage, jsonPath: route, equals: backend-high }
+    agent: test-auditor
+    model: anthropic/claude-opus-5-5
+    variant: medium
+    executor: cli-session
+    skills: [prv-review-guidelines, review-confidence, test-evidence-audit, minimal-solution-review]
+    constraints:
+      - Operar estritamente read-only.
+      - Não declarar comandos executados sem registrá-los no receipt estruturado.
+      - Se o modelo ficar indisponível, tentar retry bounded e modelo compatível alternativo.
+      - No Codex, usar codex-multi-auth somente se essa capacidade estiver disponível.
+      - Se todos os fallbacks falharem, retornar status=degraded e reducedConfidence=true.
+      - 'degraded SOMENTE para falha de modelo/ferramenta. Teste, suíte ou mutação não executados NÃO são degraded: status=pass, reducedConfidence=true e missingEvidence[] com o motivo de cada item.'
+    output: Review backend findings using the applicable Skills.
+    prompt: |
+      Revise este PR backend usando as Skills carregadas, sem editar arquivos.
+      Tarefa: {{task}}
+      Intake: {{step.pr_intake}}
+      Recon: {{step.diff_recon}}
+      Triagem de risco: {{step.risk_triage}}
+      Antes de revisar, leia quando existirem no repositório: openspec/project.md, openspec/changes/
+      (mudanças recentes relevantes ao diff), docs/adrs/ ou adrs/ (ADRs aplicáveis às áreas tocadas
+      pelo diff), docs/guidelines/. Não é obrigatório ler tudo — priorize o que for relevante ao
+      escopo do diff.
+      Cubra limites de domínio, persistência, HTTP/DTOs, contratos front-back,
+      segurança, performance, escopo e testes. Não transforme regras da Skill em checklist
+      artificial: aplique somente o que for relevante ao diff.
+      Regras de qualidade dos achados:
+      - Confiança: aplique review-confidence. Só vira finding com confiança >= 80; o restante vai para `nits`.
+      - Severidade P0..P3 pelo que a falha FAZ (cenário de falha concreto), nunca por querer ou não o merge.
+      - Falha que já existia na base (não introduzida pelo diff): marque `preexisting: true`.
+      - FILTRO DE RUÍDO — não reporte: checklist/evidência vazia da descrição do PR, ordem de merge/deploy,
+        nome de branch, casos de borda improváveis, animação/estética menor, dependências de backend,
+        e pontos baseados só na descrição da PR sem evidência no código.
+      - Cada finding tem id estável F1..Fn, `confidence` (0-100), `anchor` {path, line, side: "RIGHT"}
+        dentro de um hunk do diff quando houver, `failureScenario` (cenário concreto; em achado de
+        desenho, `cost` e `minimalAlternative`) e `suggestion`
+        (inclua na `recommendation`; use `suggestion` como trecho/ação curta).
+      - Não duplique o que já está em `existingComments` do intake (comentários/reviews existentes).
+      Ignore quem já aprovou/revisou a PR e quantos approves existem; revise o diff de forma independente e considere apenas o conteúdo dos comentários existentes.
+      DESENHO DA SOLUÇÃO: aplique ao diff os seis critérios da Skill minimal-solution-review (invariante
+      existente, custo de cada peça nova, alternativa mínima, mitigação de efeito colateral, casos
+      equivalentes, change OpenSpec). Achado de desenho usa `kind: "design"`: no lugar de
+      `failureScenario`, preencha `cost` e `minimalAlternative`; confiança >= 80 exige `arquivo:linha`
+      da garantia existente ou da alternativa; severidade no máximo P2. Os demais achados usam
+      `kind: "defect"`. Guarda fail-closed em fronteira de segurança (authz, identidade, origem, limites)
+      nunca é redundância. Registre `changeCheck` conforme a Skill; sem ele o review é INCOMPLETO.
+      Forma do código (tamanho, duplicação, nomes, tipos) é de outro nó: não reporte aqui.
+      EVIDÊNCIA NÃO EXECUTADA: este nó é read-only. Se não rodou suíte/teste/mutação (ou não pôde), isso NÃO é degraded:
+      retorne status=pass, reducedConfidence=true e liste cada item em `missingEvidence` como
+      {"item":"...","reason":"..."} (ex.: "mutação do guard X", "reason": "nó read-only"). Use status=degraded
+      somente se o modelo ou uma ferramenta essencial falhou e não há findings utilizáveis.
+      Carregue as Skills declaradas: use a ferramenta Skill se estiver disponível; caso contrário, leia o SKILL.md (e references/ quando existir) em ~/.agents/skills/<nome>/ ou ~/.claude/skills/<nome>/ e aplique ao diff.
+      Retorne somente JSON válido:
+      { "status": "pass|degraded", "reducedConfidence": false, "findings": [{"id":"F1","kind":"defect|design","severity":"P0|P1|P2|P3","confidence":0,"title":"...","evidence":"...","failureScenario":"...","cost":"...","minimalAlternative":"...","impact":"...","recommendation":"...","suggestion":"...","anchor":{"path":"...","line":0,"side":"RIGHT"},"preexisting":false}], "nits": [], "changeCheck": {"required":false,"found":"openspec/changes/<id>|none|n/a","reason":"..."},"commandsRun": [{"command":"...","result":"passed|failed","evidence":"..."}], "missingEvidence": [{"item":"...","reason":"..."}], "risks": [], "next": "continue|stop" }
+
+  - id: review_findings_frontend_standard
+    after: [diff_recon, risk_triage]
+    when: { step: risk_triage, jsonPath: route, in: [frontend-low, frontend-medium] }
+    agent: test-auditor
+    model: anthropic/claude-sonnet-5-5
+    variant: medium
+    executor: cli-session
+    skills: [prv-review-guidelines-front, review-confidence, test-evidence-audit, minimal-solution-review]
+    constraints:
+      - Operar estritamente read-only.
+      - Não declarar comandos executados sem registrá-los no receipt estruturado.
+      - Se o modelo ficar indisponível, tentar retry bounded e modelo compatível alternativo.
+      - No Codex, usar codex-multi-auth somente se essa capacidade estiver disponível.
+      - Se todos os fallbacks falharem, retornar status=degraded e reducedConfidence=true.
+      - 'degraded SOMENTE para falha de modelo/ferramenta. Teste, suíte ou mutação não executados NÃO são degraded: status=pass, reducedConfidence=true e missingEvidence[] com o motivo de cada item.'
+    output: Review frontend findings using the applicable Skills.
+    prompt: |
+      Revise este PR frontend (MFE ou Next.js) usando as Skills carregadas, sem editar arquivos.
+      Tarefa: {{task}}
+      Intake: {{step.pr_intake}}
+      Recon: {{step.diff_recon}}
+      Triagem de risco: {{step.risk_triage}}
+      Antes de revisar, leia quando existirem no repositório: openspec/project.md, openspec/changes/
+      (mudanças recentes relevantes ao diff), docs/adrs/ ou adrs/ (ADRs aplicáveis às áreas tocadas
+      pelo diff), docs/guidelines/. Não é obrigatório ler tudo — priorize o que for relevante ao
+      escopo do diff.
+      Cubra app shell/limites de módulo ou rotas, contratos, estado, responsividade,
+      acessibilidade, performance, segurança, escopo e testes. Não transforme regras da Skill
+      em checklist artificial: aplique somente o que for relevante ao diff.
+      Regras de qualidade dos achados:
+      - Confiança: aplique review-confidence. Só vira finding com confiança >= 80; o restante vai para `nits`.
+      - Severidade P0..P3 pelo que a falha FAZ (cenário de falha concreto), nunca por querer ou não o merge.
+      - Falha que já existia na base (não introduzida pelo diff): marque `preexisting: true`.
+      - FILTRO DE RUÍDO — não reporte: checklist/evidência vazia da descrição do PR, ordem de merge/deploy,
+        nome de branch, casos de borda improváveis, animação/estética menor, dependências de backend,
+        e pontos baseados só na descrição da PR sem evidência no código.
+      - Cada finding tem id estável F1..Fn, `confidence` (0-100), `anchor` {path, line, side: "RIGHT"}
+        dentro de um hunk do diff quando houver, `failureScenario` (cenário concreto; em achado de
+        desenho, `cost` e `minimalAlternative`) e `suggestion`
+        (inclua na `recommendation`; use `suggestion` como trecho/ação curta).
+      - Não duplique o que já está em `existingComments` do intake (comentários/reviews existentes).
+      Ignore quem já aprovou/revisou a PR e quantos approves existem; revise o diff de forma independente e considere apenas o conteúdo dos comentários existentes.
+      DESENHO DA SOLUÇÃO: aplique ao diff os seis critérios da Skill minimal-solution-review (invariante
+      existente, custo de cada peça nova, alternativa mínima, mitigação de efeito colateral, casos
+      equivalentes, change OpenSpec). Achado de desenho usa `kind: "design"`: no lugar de
+      `failureScenario`, preencha `cost` e `minimalAlternative`; confiança >= 80 exige `arquivo:linha`
+      da garantia existente ou da alternativa; severidade no máximo P2. Os demais achados usam
+      `kind: "defect"`. Guarda fail-closed em fronteira de segurança (authz, identidade, origem, limites)
+      nunca é redundância. Registre `changeCheck` conforme a Skill; sem ele o review é INCOMPLETO.
+      Forma do código (tamanho, duplicação, nomes, tipos) é de outro nó: não reporte aqui.
+      AUDITORIA OBRIGATÓRIA "Estados e caminhos alternativos" (seção da skill prv-review-guidelines-front;
+      aplique mesmo que a skill carregada ainda não a contenha). Analise explicitamente:
+      1. revalidação em todo caminho que grava, incluindo confirmações intermediárias;
+      2. loading/erro/timeout de consultas, sem liberar ação em estado desconhecido;
+      3. dado legado vazio/inválido sendo reenviado;
+      4. corrida entre escrita e estado assíncrono;
+      5. estados de UI sem saída.
+      O review é INCOMPLETO se essa análise não aparecer. Registre `statesAudit`: "done" ou
+      "skipped:<motivo>" (skipped só com motivo concreto, ex.: diff sem UI/escrita).
+      EVIDÊNCIA NÃO EXECUTADA: este nó é read-only. Se não rodou suíte/teste/mutação (ou não pôde), isso NÃO é degraded:
+      retorne status=pass, reducedConfidence=true e liste cada item em `missingEvidence` como
+      {"item":"...","reason":"..."} (ex.: "mutação do guard X", "reason": "nó read-only"). Use status=degraded
+      somente se o modelo ou uma ferramenta essencial falhou e não há findings utilizáveis.
+      Carregue as Skills declaradas: use a ferramenta Skill se estiver disponível; caso contrário, leia o SKILL.md (e references/ quando existir) em ~/.agents/skills/<nome>/ ou ~/.claude/skills/<nome>/ e aplique ao diff.
+      Retorne somente JSON válido:
+      { "status": "pass|degraded", "reducedConfidence": false, "findings": [{"id":"F1","kind":"defect|design","severity":"P0|P1|P2|P3","confidence":0,"title":"...","evidence":"...","failureScenario":"...","cost":"...","minimalAlternative":"...","impact":"...","recommendation":"...","suggestion":"...","anchor":{"path":"...","line":0,"side":"RIGHT"},"preexisting":false}], "nits": [], "changeCheck": {"required":false,"found":"openspec/changes/<id>|none|n/a","reason":"..."},"statesAudit": "done|skipped:<motivo>", "commandsRun": [{"command":"...","result":"passed|failed","evidence":"..."}], "missingEvidence": [{"item":"...","reason":"..."}], "risks": [], "next": "continue|stop" }
+
+  - id: review_findings_frontend_deep
+    after: [diff_recon, risk_triage]
+    when: { step: risk_triage, jsonPath: route, equals: frontend-high }
+    agent: test-auditor
+    model: anthropic/claude-opus-5-5
+    variant: medium
+    executor: cli-session
+    skills: [prv-review-guidelines-front, review-confidence, test-evidence-audit, minimal-solution-review]
+    constraints:
+      - Operar estritamente read-only.
+      - Não declarar comandos executados sem registrá-los no receipt estruturado.
+      - Se o modelo ficar indisponível, tentar retry bounded e modelo compatível alternativo.
+      - No Codex, usar codex-multi-auth somente se essa capacidade estiver disponível.
+      - Se todos os fallbacks falharem, retornar status=degraded e reducedConfidence=true.
+      - 'degraded SOMENTE para falha de modelo/ferramenta. Teste, suíte ou mutação não executados NÃO são degraded: status=pass, reducedConfidence=true e missingEvidence[] com o motivo de cada item.'
+    output: Review frontend findings using the applicable Skills.
+    prompt: |
+      Revise este PR frontend (MFE ou Next.js) usando as Skills carregadas, sem editar arquivos.
+      Tarefa: {{task}}
+      Intake: {{step.pr_intake}}
+      Recon: {{step.diff_recon}}
+      Triagem de risco: {{step.risk_triage}}
+      Antes de revisar, leia quando existirem no repositório: openspec/project.md, openspec/changes/
+      (mudanças recentes relevantes ao diff), docs/adrs/ ou adrs/ (ADRs aplicáveis às áreas tocadas
+      pelo diff), docs/guidelines/. Não é obrigatório ler tudo — priorize o que for relevante ao
+      escopo do diff.
+      Cubra app shell/limites de módulo ou rotas, contratos, estado, responsividade,
+      acessibilidade, performance, segurança, escopo e testes. Não transforme regras da Skill
+      em checklist artificial: aplique somente o que for relevante ao diff.
+      Regras de qualidade dos achados:
+      - Confiança: aplique review-confidence. Só vira finding com confiança >= 80; o restante vai para `nits`.
+      - Severidade P0..P3 pelo que a falha FAZ (cenário de falha concreto), nunca por querer ou não o merge.
+      - Falha que já existia na base (não introduzida pelo diff): marque `preexisting: true`.
+      - FILTRO DE RUÍDO — não reporte: checklist/evidência vazia da descrição do PR, ordem de merge/deploy,
+        nome de branch, casos de borda improváveis, animação/estética menor, dependências de backend,
+        e pontos baseados só na descrição da PR sem evidência no código.
+      - Cada finding tem id estável F1..Fn, `confidence` (0-100), `anchor` {path, line, side: "RIGHT"}
+        dentro de um hunk do diff quando houver, `failureScenario` (cenário concreto; em achado de
+        desenho, `cost` e `minimalAlternative`) e `suggestion`
+        (inclua na `recommendation`; use `suggestion` como trecho/ação curta).
+      - Não duplique o que já está em `existingComments` do intake (comentários/reviews existentes).
+      Ignore quem já aprovou/revisou a PR e quantos approves existem; revise o diff de forma independente e considere apenas o conteúdo dos comentários existentes.
+      DESENHO DA SOLUÇÃO: aplique ao diff os seis critérios da Skill minimal-solution-review (invariante
+      existente, custo de cada peça nova, alternativa mínima, mitigação de efeito colateral, casos
+      equivalentes, change OpenSpec). Achado de desenho usa `kind: "design"`: no lugar de
+      `failureScenario`, preencha `cost` e `minimalAlternative`; confiança >= 80 exige `arquivo:linha`
+      da garantia existente ou da alternativa; severidade no máximo P2. Os demais achados usam
+      `kind: "defect"`. Guarda fail-closed em fronteira de segurança (authz, identidade, origem, limites)
+      nunca é redundância. Registre `changeCheck` conforme a Skill; sem ele o review é INCOMPLETO.
+      Forma do código (tamanho, duplicação, nomes, tipos) é de outro nó: não reporte aqui.
+      AUDITORIA OBRIGATÓRIA "Estados e caminhos alternativos" (seção da skill prv-review-guidelines-front;
+      aplique mesmo que a skill carregada ainda não a contenha). Analise explicitamente:
+      1. revalidação em todo caminho que grava, incluindo confirmações intermediárias;
+      2. loading/erro/timeout de consultas, sem liberar ação em estado desconhecido;
+      3. dado legado vazio/inválido sendo reenviado;
+      4. corrida entre escrita e estado assíncrono;
+      5. estados de UI sem saída.
+      O review é INCOMPLETO se essa análise não aparecer. Registre `statesAudit`: "done" ou
+      "skipped:<motivo>" (skipped só com motivo concreto, ex.: diff sem UI/escrita).
+      EVIDÊNCIA NÃO EXECUTADA: este nó é read-only. Se não rodou suíte/teste/mutação (ou não pôde), isso NÃO é degraded:
+      retorne status=pass, reducedConfidence=true e liste cada item em `missingEvidence` como
+      {"item":"...","reason":"..."} (ex.: "mutação do guard X", "reason": "nó read-only"). Use status=degraded
+      somente se o modelo ou uma ferramenta essencial falhou e não há findings utilizáveis.
+      Carregue as Skills declaradas: use a ferramenta Skill se estiver disponível; caso contrário, leia o SKILL.md (e references/ quando existir) em ~/.agents/skills/<nome>/ ou ~/.claude/skills/<nome>/ e aplique ao diff.
+      Retorne somente JSON válido:
+      { "status": "pass|degraded", "reducedConfidence": false, "findings": [{"id":"F1","kind":"defect|design","severity":"P0|P1|P2|P3","confidence":0,"title":"...","evidence":"...","failureScenario":"...","cost":"...","minimalAlternative":"...","impact":"...","recommendation":"...","suggestion":"...","anchor":{"path":"...","line":0,"side":"RIGHT"},"preexisting":false}], "nits": [], "changeCheck": {"required":false,"found":"openspec/changes/<id>|none|n/a","reason":"..."},"statesAudit": "done|skipped:<motivo>", "commandsRun": [{"command":"...","result":"passed|failed","evidence":"..."}], "missingEvidence": [{"item":"...","reason":"..."}], "risks": [], "next": "continue|stop" }
+
+  - id: review_findings_design_system_standard
+    after: [diff_recon, risk_triage]
+    when: { step: risk_triage, jsonPath: route, in: [design-system-low, design-system-medium] }
+    agent: test-auditor
+    model: anthropic/claude-sonnet-5-5
+    variant: medium
+    executor: cli-session
+    skills: [prv-ds-compliance, review-confidence, test-evidence-audit, minimal-solution-review]
+    constraints:
+      - Operar estritamente read-only.
+      - Não declarar comandos executados sem registrá-los no receipt estruturado.
+      - Se o modelo ficar indisponível, tentar retry bounded e modelo compatível alternativo.
+      - No Codex, usar codex-multi-auth somente se essa capacidade estiver disponível.
+      - Se todos os fallbacks falharem, retornar status=degraded e reducedConfidence=true.
+      - 'degraded SOMENTE para falha de modelo/ferramenta. Teste, suíte ou mutação não executados NÃO são degraded: status=pass, reducedConfidence=true e missingEvidence[] com o motivo de cada item.'
+    output: Review design system findings using the applicable Skills.
+    prompt: |
+      Revise este PR do Design System (monorepo Turbo+PNPM de tokens/componentes/ícones)
+      usando as Skills carregadas, sem editar arquivos.
+      Tarefa: {{task}}
+      Intake: {{step.pr_intake}}
+      Recon: {{step.diff_recon}}
+      Triagem de risco: {{step.risk_triage}}
+      Antes de revisar, leia quando existirem no repositório: openspec/project.md, openspec/changes/
+      (mudanças recentes relevantes ao diff), docs/adrs/ ou adrs/ (ADRs aplicáveis às áreas tocadas
+      pelo diff), docs/guidelines/. Não é obrigatório ler tudo — priorize o que for relevante ao
+      escopo do diff.
+      Cubra conformidade com tokens, ícones e componentes do Design System (via MCP pravaler-ds),
+      breaking changes de API pública de pacotes publicados via Changesets, versionamento semântico
+      correto, impacto em consumidores (pip-remotes, canais-front etc.), escopo e testes. Não
+      transforme regras da Skill em checklist artificial: aplique somente o que for relevante ao diff.
+      Regras de qualidade dos achados:
+      - Confiança: aplique review-confidence. Só vira finding com confiança >= 80; o restante vai para `nits`.
+      - Severidade P0..P3 pelo que a falha FAZ (cenário de falha concreto), nunca por querer ou não o merge.
+      - Falha que já existia na base (não introduzida pelo diff): marque `preexisting: true`.
+      - FILTRO DE RUÍDO — não reporte: checklist/evidência vazia da descrição do PR, ordem de merge/deploy,
+        nome de branch, casos de borda improváveis, animação/estética menor, dependências de backend,
+        e pontos baseados só na descrição da PR sem evidência no código.
+      - Cada finding tem id estável F1..Fn, `confidence` (0-100), `anchor` {path, line, side: "RIGHT"}
+        dentro de um hunk do diff quando houver, `failureScenario` (cenário concreto; em achado de
+        desenho, `cost` e `minimalAlternative`) e `suggestion`
+        (inclua na `recommendation`; use `suggestion` como trecho/ação curta).
+      - Não duplique o que já está em `existingComments` do intake (comentários/reviews existentes).
+      Ignore quem já aprovou/revisou a PR e quantos approves existem; revise o diff de forma independente e considere apenas o conteúdo dos comentários existentes.
+      DESENHO DA SOLUÇÃO: aplique ao diff os seis critérios da Skill minimal-solution-review (invariante
+      existente, custo de cada peça nova, alternativa mínima, mitigação de efeito colateral, casos
+      equivalentes, change OpenSpec). Achado de desenho usa `kind: "design"`: no lugar de
+      `failureScenario`, preencha `cost` e `minimalAlternative`; confiança >= 80 exige `arquivo:linha`
+      da garantia existente ou da alternativa; severidade no máximo P2. Os demais achados usam
+      `kind: "defect"`. Guarda fail-closed em fronteira de segurança (authz, identidade, origem, limites)
+      nunca é redundância. Registre `changeCheck` conforme a Skill; sem ele o review é INCOMPLETO.
+      Forma do código (tamanho, duplicação, nomes, tipos) é de outro nó: não reporte aqui.
+      EVIDÊNCIA NÃO EXECUTADA: este nó é read-only. Se não rodou suíte/teste/mutação (ou não pôde), isso NÃO é degraded:
+      retorne status=pass, reducedConfidence=true e liste cada item em `missingEvidence` como
+      {"item":"...","reason":"..."} (ex.: "mutação do guard X", "reason": "nó read-only"). Use status=degraded
+      somente se o modelo ou uma ferramenta essencial falhou e não há findings utilizáveis.
+      Carregue as Skills declaradas: use a ferramenta Skill se estiver disponível; caso contrário, leia o SKILL.md (e references/ quando existir) em ~/.agents/skills/<nome>/ ou ~/.claude/skills/<nome>/ e aplique ao diff.
+      Retorne somente JSON válido:
+      { "status": "pass|degraded", "reducedConfidence": false, "findings": [{"id":"F1","kind":"defect|design","severity":"P0|P1|P2|P3","confidence":0,"title":"...","evidence":"...","failureScenario":"...","cost":"...","minimalAlternative":"...","impact":"...","recommendation":"...","suggestion":"...","anchor":{"path":"...","line":0,"side":"RIGHT"},"preexisting":false}], "nits": [], "changeCheck": {"required":false,"found":"openspec/changes/<id>|none|n/a","reason":"..."},"commandsRun": [{"command":"...","result":"passed|failed","evidence":"..."}], "missingEvidence": [{"item":"...","reason":"..."}], "risks": [], "next": "continue|stop" }
+
+  - id: review_findings_design_system_deep
+    after: [diff_recon, risk_triage]
+    when: { step: risk_triage, jsonPath: route, equals: design-system-high }
+    agent: test-auditor
+    model: anthropic/claude-opus-5-5
+    variant: medium
+    executor: cli-session
+    skills: [prv-ds-compliance, review-confidence, test-evidence-audit, minimal-solution-review]
+    constraints:
+      - Operar estritamente read-only.
+      - Não declarar comandos executados sem registrá-los no receipt estruturado.
+      - Se o modelo ficar indisponível, tentar retry bounded e modelo compatível alternativo.
+      - No Codex, usar codex-multi-auth somente se essa capacidade estiver disponível.
+      - Se todos os fallbacks falharem, retornar status=degraded e reducedConfidence=true.
+      - 'degraded SOMENTE para falha de modelo/ferramenta. Teste, suíte ou mutação não executados NÃO são degraded: status=pass, reducedConfidence=true e missingEvidence[] com o motivo de cada item.'
+    output: Review design system findings using the applicable Skills.
+    prompt: |
+      Revise este PR do Design System (monorepo Turbo+PNPM de tokens/componentes/ícones)
+      usando as Skills carregadas, sem editar arquivos.
+      Tarefa: {{task}}
+      Intake: {{step.pr_intake}}
+      Recon: {{step.diff_recon}}
+      Triagem de risco: {{step.risk_triage}}
+      Antes de revisar, leia quando existirem no repositório: openspec/project.md, openspec/changes/
+      (mudanças recentes relevantes ao diff), docs/adrs/ ou adrs/ (ADRs aplicáveis às áreas tocadas
+      pelo diff), docs/guidelines/. Não é obrigatório ler tudo — priorize o que for relevante ao
+      escopo do diff.
+      Cubra conformidade com tokens, ícones e componentes do Design System (via MCP pravaler-ds),
+      breaking changes de API pública de pacotes publicados via Changesets, versionamento semântico
+      correto, impacto em consumidores (pip-remotes, canais-front etc.), escopo e testes. Não
+      transforme regras da Skill em checklist artificial: aplique somente o que for relevante ao diff.
+      Regras de qualidade dos achados:
+      - Confiança: aplique review-confidence. Só vira finding com confiança >= 80; o restante vai para `nits`.
+      - Severidade P0..P3 pelo que a falha FAZ (cenário de falha concreto), nunca por querer ou não o merge.
+      - Falha que já existia na base (não introduzida pelo diff): marque `preexisting: true`.
+      - FILTRO DE RUÍDO — não reporte: checklist/evidência vazia da descrição do PR, ordem de merge/deploy,
+        nome de branch, casos de borda improváveis, animação/estética menor, dependências de backend,
+        e pontos baseados só na descrição da PR sem evidência no código.
+      - Cada finding tem id estável F1..Fn, `confidence` (0-100), `anchor` {path, line, side: "RIGHT"}
+        dentro de um hunk do diff quando houver, `failureScenario` (cenário concreto; em achado de
+        desenho, `cost` e `minimalAlternative`) e `suggestion`
+        (inclua na `recommendation`; use `suggestion` como trecho/ação curta).
+      - Não duplique o que já está em `existingComments` do intake (comentários/reviews existentes).
+      Ignore quem já aprovou/revisou a PR e quantos approves existem; revise o diff de forma independente e considere apenas o conteúdo dos comentários existentes.
+      DESENHO DA SOLUÇÃO: aplique ao diff os seis critérios da Skill minimal-solution-review (invariante
+      existente, custo de cada peça nova, alternativa mínima, mitigação de efeito colateral, casos
+      equivalentes, change OpenSpec). Achado de desenho usa `kind: "design"`: no lugar de
+      `failureScenario`, preencha `cost` e `minimalAlternative`; confiança >= 80 exige `arquivo:linha`
+      da garantia existente ou da alternativa; severidade no máximo P2. Os demais achados usam
+      `kind: "defect"`. Guarda fail-closed em fronteira de segurança (authz, identidade, origem, limites)
+      nunca é redundância. Registre `changeCheck` conforme a Skill; sem ele o review é INCOMPLETO.
+      Forma do código (tamanho, duplicação, nomes, tipos) é de outro nó: não reporte aqui.
+      EVIDÊNCIA NÃO EXECUTADA: este nó é read-only. Se não rodou suíte/teste/mutação (ou não pôde), isso NÃO é degraded:
+      retorne status=pass, reducedConfidence=true e liste cada item em `missingEvidence` como
+      {"item":"...","reason":"..."} (ex.: "mutação do guard X", "reason": "nó read-only"). Use status=degraded
+      somente se o modelo ou uma ferramenta essencial falhou e não há findings utilizáveis.
+      Carregue as Skills declaradas: use a ferramenta Skill se estiver disponível; caso contrário, leia o SKILL.md (e references/ quando existir) em ~/.agents/skills/<nome>/ ou ~/.claude/skills/<nome>/ e aplique ao diff.
+      Retorne somente JSON válido:
+      { "status": "pass|degraded", "reducedConfidence": false, "findings": [{"id":"F1","kind":"defect|design","severity":"P0|P1|P2|P3","confidence":0,"title":"...","evidence":"...","failureScenario":"...","cost":"...","minimalAlternative":"...","impact":"...","recommendation":"...","suggestion":"...","anchor":{"path":"...","line":0,"side":"RIGHT"},"preexisting":false}], "nits": [], "changeCheck": {"required":false,"found":"openspec/changes/<id>|none|n/a","reason":"..."},"commandsRun": [{"command":"...","result":"passed|failed","evidence":"..."}], "missingEvidence": [{"item":"...","reason":"..."}], "risks": [], "next": "continue|stop" }
+
+  - id: code_quality_review
+    after: [diff_recon, risk_triage]
+    when: { step: risk_triage, jsonPath: tier, in: [medium, high] }
+    agent: oracle
+    model: anthropic/claude-sonnet-5-5
+    variant: medium
+    executor: cli-session
+    skills: [code-quality-review]
+    constraints:
+      - Operar estritamente read-only.
+      - Não reportar correção, segurança, performance nem desenho da solução; outro nó cobre.
+      - Se o modelo ficar indisponível e os fallbacks falharem, retornar status=degraded.
+    output: Review de simplicidade, legibilidade e manutenção do diff.
+    prompt: |
+      Revise SOMENTE a forma do código deste PR, sem editar arquivos.
+      Correção, segurança e performance já são cobertas por outro nó: não reporte bugs aqui.
+      Se uma peça deveria existir (query, porta, dependência, guarda) também é de outro nó:
+      tome o desenho como dado.
+      A pergunta é uma só: o código que existe está na forma mais simples, legível e fácil
+      de manter?
+      Tarefa: {{task}}
+      Intake: {{step.pr_intake}}
+      Recon: {{step.diff_recon}}
+      Triagem de risco: {{step.risk_triage}}
+
+      Método (nesta ordem):
+      1. Leia por inteiro cada arquivo de produção tocado pelo diff, não só os hunks.
+         Dos testes, leia os helpers e a estrutura (describe/it); leia o corpo quando um
+         gatilho de teste disparar.
+      2. Meça antes de opinar. Para cada arquivo de produção registre em `metrics`:
+         linhas, maior função (nome e linhas), maior aninhamento, nº de `let` na maior closure.
+      3. Percorra os critérios da Skill code-quality-review (universais + os da superfície:
+         backend, frontend, testes). Para cada critério registre em `criteria`:
+         "finding", "ok" ou "n/a". Critério sem registro torna o review incompleto.
+      4. Um gatilho atingido NÃO é finding automático. Só vira finding se você conseguir
+         escrever a versão mais simples e dizer o que ela remove (linhas, ramos, mocks,
+         tipos, cópias).
+      5. Procure o que já existe: antes de propor helper, tipo ou dependência, verifique no
+         repo se há equivalente (grep) e cite o caminho.
+
+      Regras dos achados:
+      - id estável Q1..Qn; `anchor` {path, line, side: "RIGHT"} dentro de um hunk quando houver.
+      - `problem`: o que custa manter, em 1-2 frases, com números quando houver.
+      - `simplerVersion`: trecho curto (até 15 linhas) ou a ação exata. Obrigatório.
+      - `removes`: o que some com a mudança.
+      - `impact`: alto | medio | baixo. `when`: before_merge | follow_up, pelos critérios da Skill.
+      - `behaviorChange`: false sempre que possível; se true, explique e rebaixe para follow_up.
+      - `preexisting`: true se o diff só acrescentou mais uma cópia de algo que já existia.
+      - `hypothesis`: true quando o achado afirma que um teste ou guarda fica desnecessário;
+        nesse caso `when` é follow_up.
+      - Antes de classificar teste como repetição de constante, procure o valor em openspec/,
+        ADRs e contratos. Valor fixado por spec é teste de conformidade: não reporte.
+      - Guarda fail-closed em authz, identidade, origem ou limites: nunca proponha remover.
+      - Máximo 8 findings, ordenados por impacto. O excedente vai em `overflow` só com título.
+      - NÃO reporte: o que lint/formatter cobre; preferência sem ganho mensurável; item sem
+        simplerVersion; item já presente em existingComments.
+      - Registre em `keep` até 3 decisões boas do diff que não devem ser desfeitas num
+        refactor (uma linha cada). Não é elogio: é proteção contra regressão de desenho.
+
+      Carregue a Skill declarada: use a ferramenta Skill se estiver disponível; caso contrário, leia o SKILL.md em ~/.agents/skills/<nome>/ ou ~/.claude/skills/<nome>/ e aplique ao diff.
+      Retorne somente JSON válido:
+      { "status": "pass|degraded", "metrics": [{"path":"...","lines":0,"largestFunction":{"name":"...","lines":0},"maxNesting":0,"mutableInClosure":0}], "criteria": {"Q1":"finding|ok|n/a"}, "findings": [{"id":"Q1","criterion":"Q3","impact":"alto|medio|baixo","when":"before_merge|follow_up","title":"...","problem":"...","simplerVersion":"...","removes":"...","behaviorChange":false,"preexisting":false,"hypothesis":false,"anchor":{"path":"...","line":0,"side":"RIGHT"}}], "overflow": [], "keep": [], "commandsRun": [{"command":"...","result":"passed|failed","evidence":"..."}] }
+
+  - id: validation_recommendation
+    after: [review_findings_backend_standard, review_findings_backend_deep, review_findings_frontend_standard, review_findings_frontend_deep, review_findings_design_system_standard, review_findings_design_system_deep]
+    when: { step: risk_triage, jsonPath: tier, equals: high }
+    agent: oracle
+    model: anthropic/claude-sonnet-5-5
+    variant: medium
+    executor: cli-session
+    evidencePolicy: commands
+    skills: [verification-planning]
+    output: Recommend and, when safe, execute minimal review validation with evidence.
+    prompt: |
+      Recomende validação para este PR sem editar arquivos.
+      Tarefa: {{task}}
+      Recon: {{step.diff_recon}}
+      Triagem de risco: {{step.risk_triage}}
+      Findings backend (standard): {{step.review_findings_backend_standard}}
+      Findings backend (deep): {{step.review_findings_backend_deep}}
+      Findings frontend (standard): {{step.review_findings_frontend_standard}}
+      Findings frontend (deep): {{step.review_findings_frontend_deep}}
+      Findings design system (standard): {{step.review_findings_design_system_standard}}
+      Findings design system (deep): {{step.review_findings_design_system_deep}}
+      Alguns desses findings podem estar ausentes porque o nó foi pulado pela rota; ignore os
+      ausentes e trabalhe com os que existirem.
+      Execute somente comandos baratos, claramente relacionados e seguros.
+      Carregue as Skills declaradas: use a ferramenta Skill se estiver disponível; caso contrário, leia o SKILL.md (e references/ quando existir) em ~/.agents/skills/<nome>/ ou ~/.claude/skills/<nome>/ e aplique ao diff.
+      Separe `recommendedCommands` de `commandsRun`. Só inclua algo em commandsRun
+      se realmente executado nesta sessão, com result e evidence. Retorne JSON:
+      { "status": "pass|advisory|degraded", "commandsRun": [{"command":"...","result":"passed|failed","evidence":"..."}], "recommendedCommands": [], "missingEvidence": [], "risks": [], "next": "continue|stop" }
+
+  - id: review_closeout
+    after: [validation_recommendation, code_quality_review, review_findings_backend_standard, review_findings_backend_deep, review_findings_frontend_standard, review_findings_frontend_deep, review_findings_design_system_standard, review_findings_design_system_deep]
+    agent: oracle
+    model: anthropic/claude-sonnet-5-5
+    variant: medium
+    executor: cli-session
+    output: Consolidate the review report without production changes.
+    prompt: |
+      Consolide o review como RELATÓRIO, sem editar arquivos. `reviewStatus` é apenas uma
+      RECOMENDAÇÃO; no_go não interrompe o flow (a triagem humana ocorre sempre).
+      Tarefa: {{task}}
+      Intake: {{step.pr_intake}}
+      Contexto: {{context}}
+      ANTES de consolidar, valide o head: reobtenha o head atual com `gh pr view <N> --json headRefOid`
+      e compare com o `headRefOid` do intake acima. Se mudou, NÃO consolide: retorne somente
+      { "status": "stale_head", "headCheck": "stale", "next": "rode o flow-pr-review de novo no head atual" }.
+      Se igual, use headCheck="current" e siga normalmente.
+      Triagem de risco: {{step.risk_triage}}
+      Findings backend (standard): {{step.review_findings_backend_standard}}
+      Findings backend (deep): {{step.review_findings_backend_deep}}
+      Findings frontend (standard): {{step.review_findings_frontend_standard}}
+      Findings frontend (deep): {{step.review_findings_frontend_deep}}
+      Findings design system (standard): {{step.review_findings_design_system_standard}}
+      Findings design system (deep): {{step.review_findings_design_system_deep}}
+      Validação: {{step.validation_recommendation}}
+      Qualidade: {{step.code_quality_review}}
+      Nós pulados pela rota/tier podem não ter receipt; ignore-os.
+      Consolide findings preservando os ids (F1..Fn), `kind`, nits, tier e motivos, reducedConfidence/degraded
+      (com a razão). Não chame o review de independente se algum branch retornou degraded ou se houve
+      fallback não comprovado. Diferencie comandos executados (somente os presentes em receipts) de
+      recomendados.
+      Consolide em `missingEvidence` a união dos `missingEvidence` de todos os nós de findings e de
+      validation_recommendation (preserve item e reason; sem duplicatas). Evidência não executada reduz a
+      confiança (reducedConfidence=true) mas não torna o review degraded.
+      Achado de desenho (`kind: design`) conta para `reviewStatus` como qualquer finding da sua
+      severidade. Repasse `changeCheck` do nó de review sem alterar.
+      Mantenha os achados de qualidade (Q1..Qn) em `qualityFindings`, separados de `findings`, com
+      todos os campos. Eles NÃO alteram `reviewStatus`: go/no_go continua decidido só por correção,
+      segurança, contrato e desenho. Descarte o Q* que aponta para o mesmo trecho de um F* com
+      `kind: design`. Registre `qualityStatus`: "done", "skipped" (nó pulado pelo tier) ou "degraded";
+      qualidade degradada não torna o review degraded.
+      Ignore quem já aprovou/revisou a PR e quantos approves existem; revise o diff de forma independente e considere apenas o conteúdo dos comentários existentes.
+      Retorne JSON: { "status": "pass|degraded|stale_head", "headCheck": "current|stale", "reviewStatus": "go|no_go", "tier": "low|medium|high", "tierReasons": [], "reducedConfidence": false, "summary": "...", "findings": [], "nits": [], "changeCheck": {}, "qualityFindings": [], "qualityStatus": "done|skipped|degraded", "commandsRun": [], "recommendedCommands": [], "missingEvidence": [], "risks": [], "next": "..." }
+
+  - id: findings_triage
+    after: [review_closeout]
+    agent: oracle
+    model: anthropic/claude-sonnet-5-5
+    variant: low
+    executor: cli-session
+    timeout: 86400
+    constraints:
+      - Operar estritamente read-only; não publicar, editar, aprovar ou responder no GitHub.
+      - Não carregar Skill end-to-end de publicação; este YAML é a fonte de verdade do processo.
+      - Recomendar comentário somente para ajuste acionável introduzido pelo diff.
+    output: Human gate - present findings table and collect per-item marks from the user.
+    prompt: |
+      HUMAN GATE. Triagem humana dos achados.
+      Tarefa: {{task}}
+      Intake: {{step.pr_intake}}
+      Relatório: {{step.review_closeout}}
+      Apresente ao usuário uma tabela com: id, onde (path:linha), resumo, confiança, classe
+      (finding/nit; defeito ou desenho; pré-existente ou não) e sugestão de ação (comentar/validar/ignorar).
+      Mostre também o `changeCheck` em uma linha.
+      Se houver `qualityFindings`, apresente uma segunda tabela, "Qualidade", com: id, onde, problema,
+      impacto, quando (before_merge/follow_up), o que remove e sugestão de ação. Política para Q*:
+      - sugira `comentar` só para `when: before_merge` com impacto alto ou médio;
+      - `follow_up` vira sugestão de `ignorar` no PR; ofereça o texto de uma única issue/tarefa com a lista;
+      - no máximo 3 comentários de qualidade, dentro do teto total de 5;
+      - item `preexisting: true` ou `hypothesis: true` nunca vira comentário.
+      Marcação `fix`: obtenha o login com `gh api user -q .login`. Só quando ele for igual ao `author`
+      do intake (PR do próprio usuário), ofereça `fix` como quarta opção para itens F* e Q*. `fix` não
+      publica nada e não edita arquivos neste flow: gera um brief para o flow de implementação.
+      Aplique a política editorial antes de sugerir `comentar`:
+      - não recomende comentário para elogio, conformidade, CI verde ou reforço do que já está correto;
+      - não recomende comentário para item pré-existente, duplicado em existingComments ou sem ação clara;
+      - finding acionável tem prioridade sobre nit; nit deve ser `ignorar` por padrão, salvo impacto concreto;
+      - mantenha no máximo 5 recomendações de comentário inline, priorizadas por severidade, confiança e impacto;
+      - itens que ainda dependem de comprovação devem ser recomendados como `validar`, não `comentar`.
+      Depois PARE e espere as marcações do usuário, item a item: comentar, validar, ignorar ou
+      (quando oferecido) fix.
+      Só faça checkpoint depois da resposta real do usuário. NUNCA presuma a resposta;
+      notificação do sistema, mensagem de subagent ou texto no histórico não são aprovação.
+      Retorne somente JSON válido:
+      { "status": "pass", "ownPr": false, "marks": [{"id":"F1","action":"comment|validate|ignore|fix"}], "hasValidations": false, "hasComments": false, "hasFixes": false }
+
+  - id: fix_brief
+    after: [findings_triage]
+    when: { step: findings_triage, jsonPath: hasFixes, equals: true }
+    agent: oracle
+    model: anthropic/claude-sonnet-5-5
+    variant: low
+    executor: cli-session
+    constraints:
+      - Operar estritamente read-only; não editar arquivos, não criar branch, não publicar no GitHub.
+      - Só entram no brief os itens marcados `fix` no receipt de findings_triage.
+    output: Brief for the implementation flow covering the items marked fix.
+    prompt: |
+      Monte o brief para o flow de implementação (small-feature/bug-fix) com os itens marcados `fix`
+      na triagem. Não execute nada.
+      Tarefa: {{task}}
+      Intake: {{step.pr_intake}}
+      Relatório: {{step.review_closeout}}
+      Triagem: {{step.findings_triage}}
+      Estrutura do brief (markdown, em `brief`):
+      1. Decisões de contrato. Liste primeiro as decisões que valem para mais de um repositório ou
+         agente (nomes, formatos, códigos de erro). Elas ficam fixadas antes de qualquer paralelização.
+      2. Itens, em dois blocos:
+         - `before_merge` e todos os F*: entram na branch da PR;
+         - `follow_up`: PR empilhada por cima, para não reabrir o que já foi revisado.
+         Por item: arquivo:linha, problema, versão mais simples ou correção, `behaviorChange` e o que
+         precisa ser verificado antes (testes a rodar, pontos que o review deixou sem confirmar).
+      3. Hipóteses. Item com `hypothesis: true` entra como "validar antes de remover", nunca como
+         instrução de remoção.
+      4. Guardas. Guarda fail-closed em authz, identidade, origem ou limites não é removida; no máximo
+         troca-se fallback permissivo por guarda que falha fechado.
+      5. Testes:
+         - diga quem edita teste: nomeie o agente autorizado ou autorize explicitamente o `builder`
+           (cujo perfil proíbe editar testes) para os arquivos listados;
+         - o implementador entrega `testChanges`: todo teste removido ou com expectativa alterada, o
+           motivo e para onde a garantia migrou. Teste removido sem destino da garantia bloqueia;
+         - teste que fixa valor definido em spec ou contrato (openspec/, ADR) é conformidade: fica.
+      6. Auditoria obrigatória depois da implementação: `test-auditor` em modo verify, independente de
+         quem implementou, com o diff dos testes e mutações em cópia isolada. Sem ela o trabalho não
+         está pronto. Correção pedida pela auditoria na branch base exige rebase da PR empilhada.
+      Retorne somente JSON válido:
+      { "status": "pass", "brief": "...markdown...", "branches": [{"name":"...","base":"...","items":["Q1"]}], "contractDecisions": [], "testEditor": "...", "requiredAudit": "test-auditor:verify", "next": "iniciar flow de implementação com este brief" }
+
+  - id: skeptical_validation
+    after: [findings_triage]
+    when: { step: findings_triage, jsonPath: hasValidations, equals: true }
+    agent: oracle
+    model: anthropic/claude-sonnet-5-5
+    variant: medium
+    executor: cli-session
+    output: Skeptically validate only the findings marked for validation.
+    prompt: |
+      Validação EFETIVA e CÉTICA dos itens marcados `validate` na triagem. Não basta reler o diff:
+      decida por item se é preciso EXECUTAR e, quando for, execute de verdade.
+      Tarefa: {{task}}
+      Intake: {{step.pr_intake}}
+      Relatório: {{step.review_closeout}}
+      Triagem: {{step.findings_triage}}
+      Escopo de escrita: somente num worktree descartável; nunca no checkout principal; nunca
+      commit/push/publicação no GitHub.
+      Decisão por item:
+      - EXECUTAR: comportamento/lógica, suficiência ou sensibilidade de testes, regressão.
+      - ANÁLISE ESTÁTICA com evidência arquivo:linha: estilo, nomenclatura, documentação ou contrato
+        lido em outro repositório (pode ler outro repo via gh api).
+      Setup quando executar:
+      - No checkout local do repo alvo (workspace do run): `git fetch origin pull/<N>/head` e
+        `git worktree add .worktrees/pr-<N> <headRefOid>` (dentro do próprio repo, em .worktrees/).
+      - Adicione `.worktrees/` em `.git/info/exclude` (arquivo local não rastreado; NÃO edite .gitignore).
+      - PRÉ-CHECAGEM de pré-requisitos ANTES de instalar, no worktree: `npm ci --dry-run --ignore-scripts`;
+        `npm whoami --registry <registry do escopo @pravaler em .npmrc>` (autenticação no registry);
+        leia o `.npmrc` (registry/token esperados, sem imprimir segredos).
+      - Se uma pré-checagem falhar (ex.: registry @pravaler sem auth): NÃO tente instalar. Registre em
+        `notExecuted` {"item":"...","reason":"...","reasonCode":"PREREQ_MISSING","prerequisite":"npm auth @pravaler"}
+        para cada item que dependia da execução, faça análise estática e colete evidência PARCIAL do CI:
+        `gh pr checks <N>` e `gh run view <run-id> --log-failed` (ou --json). Registre cada comando em
+        `commandsRun` com `evidenceSource:"ci"` e rotule como parcial. CI verde prova que a suíte
+        passou no head; NÃO prova sensibilidade a mutação: não classifique como REAL/NAO_REAL um item que
+        dependia de mutação só por causa do CI (use PARCIAL e diga o que falta).
+      - Se as pré-checagens passarem, instale conforme o lockfile (ex.: `npm ci --ignore-scripts`). Se a
+        instalação falhar ou passar de ~8 minutos, trate como notExecuted (reasonCode "INSTALL_FAILED" ou
+        "TIMEOUT") e siga a mesma regra de análise estática + evidência parcial do CI.
+      - status=degraded SOMENTE para falha de modelo/ferramenta; pré-requisito ausente é status=pass com
+        reducedConfidence=true e notExecuted preenchido.
+      Execução:
+      - Reproduza o cenário com teste/script DESCARTÁVEL de nome fora do padrão do repo
+        (ex.: zz-probe*.spec.*) e compare com o BASELINE (base da PR) para provar se é regressão
+        introduzida pelo diff.
+      - Para achados sobre testes, aplique MUTAÇÕES (neutralize a regra/comportamento) e registre
+        quais testes falham; reverta com `git checkout`.
+      - Valide a SUGESTÃO rodando-a no worktree e cite o nome real da API/padrão do repositório.
+      - Item Q* (qualidade): não há cenário a reproduzir; aplique a `simplerVersion` no worktree e
+        confirme que compila e que os testes passam. Se `hypothesis: true`, prove ou refute a hipótese
+        por mutação antes de classificar.
+      Limpeza OBRIGATÓRIA ao final: `git worktree remove --force .worktrees/pr-<N>`, apague a branch
+      temporária e os probes; confirme `git status` limpo no checkout principal e relate em `cleanup`.
+      Nunca declare comando como executado sem tê-lo executado; registre `commandsRun` reais (com
+      result/evidence) e `notExecuted`.
+      Para cada item classifique REAL / PARCIAL / NAO_REAL, com cadeia de evidência arquivo:linha e
+      âncora dentro de um hunk do diff, lado RIGHT.
+      - NAO_REAL: descartado (keep=false).
+      - PARCIAL (pré-existente ou depende de premissa): vira PERGUNTA, não afirmação.
+      Retorne somente JSON válido:
+      { "status": "pass|degraded", "reducedConfidence": false, "results": [{"id":"F1","classification":"REAL|PARCIAL|NAO_REAL","evidence":"arquivo:linha ...","anchor":{"path":"...","line":0,"side":"RIGHT"},"keep":true,"suggestionCheck":"...","reproduction":"..."}], "commandsRun": [{"command":"...","result":"passed|failed","evidence":"...","evidenceSource":"local|ci","partial":false}], "notExecuted": [{"item":"...","reason":"...","reasonCode":"PREREQ_MISSING|INSTALL_FAILED|TIMEOUT|OTHER","prerequisite":"..."}], "cleanup": "..." }
+
+  - id: comment_drafts
+    after: [skeptical_validation, findings_triage]
+    agent: oracle
+    model: anthropic/claude-sonnet-5-5
+    variant: low
+    executor: cli-session
+    timeout: 86400
+    constraints:
+      - Não publicar, editar, aprovar ou responder no GitHub; produzir somente rascunhos.
+      - Não carregar Skill end-to-end de publicação; este YAML é a fonte de verdade do processo.
+      - O receipt de findings_triage define os únicos itens elegíveis para o rascunho.
+    output: Human gate - draft review comments and obtain explicit per-item approval.
+    prompt: |
+      HUMAN GATE. Monte rascunhos de comentários e obtenha aprovação explícita do usuário.
+      Tarefa: {{task}}
+      Intake: {{step.pr_intake}}
+      Relatório: {{step.review_closeout}}
+      Triagem: {{step.findings_triage}}
+      Validação cética (pode estar ausente se nada foi marcado `validate`): {{step.skeptical_validation}}
+      Inclua somente itens marcados `comment` e itens validados que sobreviveram (keep=true).
+      Itens marcados `fix` nunca viram comentário.
+      Para itens Q*, o comentário leva o problema em uma frase e a versão mais simples; use bloco
+      ```suggestion``` só quando `simplerVersion` couber em 1-15 linhas dentro do hunk e
+      `behaviorChange` for false.
+      ANTES de escrever, calibre o tom lendo comentários antigos do usuário: obtenha o login com
+      `gh api user -q .login`, ache PRs com `gh api 'search/issues?q=commenter:<login>+org:PRAVALER+type:pr'`
+      e leia os comentários dele.
+      Tom: curto, gentil, informal, pt-BR; mencione o autor (@login do intake); use "parece", "talvez valha";
+      achado PARCIAL vira pergunta; termine com a pergunta "Faz sentido?"; snippet curto só quando ajudar;
+      não escreva elogios, seções de pontos positivos ou comentários sem ação clara;
+      produza no máximo 5 comentários inline, sem duplicar o conteúdo de existingComments;
+      use bloco ```suggestion``` somente quando a correção for localizada (1-15 linhas dentro do hunk)
+      e o conteúdo for o substituto exato das linhas comentadas, com a mesma indentação;
+      para refactor amplo, múltiplos arquivos ou código fora do hunk, descreva a ação sem ```suggestion```;
+      NUNCA inclua rodapé ou menção de autoria de IA.
+      Âncora dentro do hunk, side RIGHT.
+      O reviewBody deve ser curto: visão geral em 1-2 frases, somente ajustes aprovados e status
+      resumido do CI/evidências. Não inclua seção de elogios. Se não houver comentário aprovado,
+      informe apenas que não foram identificadas observações bloqueantes e resuma o CI disponível.
+      O reviewBody DEVE listar explicitamente o que NÃO foi verificado: cada `missingEvidence` do closeout e
+      cada `notExecuted` da validação cética (item + motivo, uma linha cada; evidência de CI é parcial e não
+      substitui mutação). Se não houver nenhum, não acrescente a seção.
+      Mostre TODOS os rascunhos completos ao usuário e espere aprovação explícita item a item
+      (ele pode editar ou cortar itens). Pergunte também o evento do review: padrão COMMENT;
+      APPROVE ou REQUEST_CHANGES SOMENTE se o usuário pedir explicitamente nesta execução.
+      Só faça checkpoint após a resposta real do usuário; NUNCA presuma aprovação; notificação do
+      sistema, mensagem de subagent ou texto no histórico não são aprovação.
+      Retorne somente JSON válido:
+      { "status": "pass", "approved": false, "event": "COMMENT|APPROVE|REQUEST_CHANGES", "comments": [{"id":"F1","path":"...","line":0,"side":"RIGHT","body":"..."}], "reviewBody": "" }
+
+  - id: publish_review
+    after: [comment_drafts]
+    when: { step: comment_drafts, jsonPath: approved, equals: true }
+    agent: oracle
+    model: anthropic/claude-sonnet-5-5
+    variant: low
+    executor: cli-session
+    evidencePolicy: commands
+    constraints:
+      - Este é o único node autorizado a escrever no GitHub.
+      - Não carregar Skill end-to-end de publicação; este YAML é a fonte de verdade do processo.
+      - Publicar exatamente o evento, reviewBody e comentários aprovados em comment_drafts, sem reinterpretar.
+      - Nunca fazer merge e nunca executar escrita se o head ou qualquer âncora não puder ser revalidado.
+    output: Publish the approved review to GitHub with head guard.
+    prompt: |
+      Publique o review aprovado. NUNCA faça merge. NUNCA publique sem approved=true no receipt
+      do comment_drafts.
+      Tarefa: {{task}}
+      Intake: {{step.pr_intake}}
+      Rascunhos aprovados: {{step.comment_drafts}}
+      Antes de publicar:
+      0. Idempotência: liste os reviews do PR (`gh api repos/<owner>/<repo>/pulls/<N>/reviews`). Se já existe um
+         review do usuário atual com o mesmo `commit_id` e corpo, não republique: retorne status=pass com
+         o reviewUrl existente.
+      1. Reobtenha o headRefOid atual do PR e compare com o `headRefOid` do intake. Se mudou,
+         PARE e reporte (status=blocked, blockedReason=head_changed), sem publicar. É terminal.
+      2. Releia cada linha de âncora no head e confirme que continua dentro do hunk (side RIGHT).
+      3. Confirme que evento, reviewBody e comments são idênticos ao receipt aprovado; não acrescente,
+         remova, reescreva ou reordene feedback nesta etapa.
+      Publicação: monte o JSON do review com a ferramenta Write (não use heredoc), com
+      `commit_id` = head, `event` aprovado, `body` = reviewBody e comentários inline
+      {path, line, side: "RIGHT", body}. Publique exatamente 1 review por PR com
+      `gh api --method POST repos/<owner>/<repo>/pulls/<N>/reviews --input <arquivo>`.
+      Se `gh` falhar de forma transitória (rede, 5xx, rate limit, timeout) e nada foi publicado, retorne
+      status=blocked, blockedReason=transient_error e o erro em `error`; o operador resolve e roda flow_continue.
+      Antes de responder transient_error, confirme com a listagem de reviews que o review NÃO foi criado.
+      Retorne uma tabela com o link do review e o estado, e o JSON (blockedReason é obrigatório; use "none" em pass):
+      { "status": "pass|blocked", "blockedReason": "none|head_changed|transient_error", "reviewUrl": "...", "state": "...", "error": "...", "commandsRun": [{"command":"...","result":"passed|failed","evidence":"..."}] }
+    outputSchema:
+      type: object
+      required: [status, blockedReason]
+      properties:
+        status: { enum: [pass, blocked] }
+        blockedReason: { enum: [none, head_changed, transient_error] }
+      if:
+        properties: { status: { const: pass } }
+        required: [status]
+      then:
+        properties: { blockedReason: { const: none } }
