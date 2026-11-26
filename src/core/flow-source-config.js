@@ -4,6 +4,7 @@ import { extname, isAbsolute, join } from "node:path";
 import { isAlias, parseDocument, visit } from "yaml";
 import { validToolPolicy } from "./flow-tool-policy.js";
 import { FlowError } from "./errors.js";
+import { validateSkillsConfig } from "./skill-resolver.js";
 
 const identifier = /^[a-z][a-z0-9-]{0,62}$/;
 const remoteName = /^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$/;
@@ -60,7 +61,7 @@ export function validateFlowSourceConfig(value) {
 
   const ids = new Set();
   const sources = value.sources.map((source) => {
-    const allowed = new Set(["id", "mode", "path", "remote", "branch", "workspaceRoots", "sync", "execution", "policy"]);
+    const allowed = new Set(["id", "mode", "path", "remote", "branch", "workspaceRoots", "sync", "execution", "policy", "skills"]);
     const execution = source?.execution;
     const validExecution = execution === undefined || (execution && typeof execution === "object" && !Array.isArray(execution)
       && exactKeys(execution, new Set(["runtime", "models", "efforts", "fallback", "profiles", "defaultProfileId"]))
@@ -77,6 +78,8 @@ export function validateFlowSourceConfig(value) {
       && exactKeys(source.sync, new Set(["pull", "push"]))
       && source.sync.pull === "confirm" && pushPolicies.has(source.sync.push);
     if (source?.policy !== undefined && !validToolPolicy(source.policy)) throw new FlowError("INVALID_FLOW_SOURCE_CONFIG", `Invalid tool policy for profile ${identifier.test(source?.id ?? "") ? source.id : "unknown"}: check rule syntax, explicit positive rules, and runtime mappings.`);
+    const skillsConfig = validateSkillsConfig(source?.skills);
+    if (!skillsConfig.valid) throw new FlowError("INVALID_FLOW_SOURCE_CONFIG", `Invalid skills.roots for source ${identifier.test(source?.id ?? "") ? source.id : "unknown"}: use 1-16 unique absolute paths (or ~/...) without ".." segments.`);
     const valid = source && typeof source === "object" && !Array.isArray(source)
       && exactKeys(source, allowed) && identifier.test(source.id) && ["local", "git"].includes(source.mode)
       && typeof source.path === "string" && source.path.length <= 4096 && isAbsolute(source.path)
@@ -90,7 +93,7 @@ export function validateFlowSourceConfig(value) {
       throw new FlowError("INVALID_FLOW_SOURCE_CONFIG", "Git source remote or branch is invalid.");
     }
     ids.add(source.id);
-    return { ...structuredClone(source), workspaceRoots: [...(source.workspaceRoots ?? [])] };
+    return { ...structuredClone(source), ...(skillsConfig.value ? { skills: skillsConfig.value } : {}), workspaceRoots: [...(source.workspaceRoots ?? [])] };
   });
   return { schemaVersion: "v1", sources };
 }

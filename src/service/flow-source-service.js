@@ -6,6 +6,7 @@ import { FlowCatalog } from "../core/flow-catalog.js";
 import { validateFlowToolPolicy } from "../core/flow-tool-policy.js";
 import { FlowError } from "../core/errors.js";
 import { loadFlowSourceConfig } from "../core/flow-source-config.js";
+import { defaultSkillRoots } from "../core/skill-resolver.js";
 
 const execFile = promisify(execFileCallback);
 
@@ -208,6 +209,7 @@ export class FlowSourceService {
     if (source && gitIdentity) Object.assign(source, { gitCommit: gitIdentity.commit, currentBranch: gitIdentity.branch });
     return { flowId: entry.flow.id, profileId: selected.profileId, flowSourceId: entry.sourceId, flowContentHash: entry.contentHash,
       ...(selectedRuntime ? { runtime: selectedRuntime } : {}), flowDefinition,
+      skillRoots: source?.skills?.roots ?? defaultSkillRoots(), skillRootsConfigured: Boolean(source?.skills?.roots),
       ...(executionProfile ? { executionProfileId: executionProfile.id, executionProfileSnapshot: structuredClone(executionProfile), availableExecutionProfiles: profiles.map(({ id, name, runtime }) => ({ id, name, runtime })) } : {}),
       ...(!executionProfile && execution?.fallback ? { fallbackExecutions } : {}), ...(gitIdentity?.commit ? { flowGitCommit: gitIdentity.commit } : {}) };
   }

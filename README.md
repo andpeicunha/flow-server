@@ -411,6 +411,39 @@ context can call `flow_inspect` for the run task. Skill nodes with
 and an unverified warning when that runtime is omitted. A `true` value is the
 flow author's capability declaration, not proof that a Skill was loaded.
 
+### Node Skills: declared roots, explicit paths, blocking
+
+Skills are not loaded globally. Each source may set where they live:
+
+```json
+{ "id": "work", "mode": "git", "path": "/flows/work", "sync": { "pull": "confirm", "push": "manual" },
+  "skills": { "roots": ["~/Apps/dotfiles/skills", "~/.agents/skills"] } }
+```
+
+`skills.roots` is optional, up to 16 unique paths. `~` is expanded; relative
+paths and `..` segments are rejected. A Skill `name` (`^[a-z][a-z0-9-]{0,127}$`)
+resolves to the first root, in order, that contains `<root>/<name>/SKILL.md`
+(a symlinked directory counts). Without `skills.roots`, compatibility roots
+`~/.agents/skills` and `~/.claude/skills` are searched.
+
+- **Blocking:** when a run is created (`flow_start_guided`), every Skill declared
+  by every node is resolved, including nodes a `when` condition may later skip
+  (fail early and predictably). If any is missing the call fails with
+  `SKILL_MISSING`, listing each missing Skill, the nodes that declare it, and the
+  roots searched. No run is created. There is no override.
+- **Explicit path:** `flow_next` returns `skillPaths: [{ name, path, sha256 }]` for
+  each node, and `toolGuidance` tells the agent to read every listed `SKILL.md`
+  in full (plus its `references/` folder) and apply it to that node only. Because
+  the Skill is loaded by path, the `skillToolSupport` warning is not emitted for
+  such a node.
+- **Audit:** the run stores `skillResolution` (roots, resolved paths, SHA-256 of
+  each `SKILL.md`). `flow_next` re-checks the Skills of the nodes it returns: a
+  vanished Skill fails that call with `SKILL_MISSING` (run state unchanged; retry
+  after restoring it), and an edited `SKILL.md` is recorded in
+  `skillResolution.changes` with the previous and new hash. `flow_audit` returns it.
+- **Doctor:** the `skills` check uses the same roots and reports each missing
+  Skill with the roots searched (`details`, `searchedRoots`).
+
 To reuse selected analysis, start a new run with both `reuseFromRunId` and
 `reuseNodeIds` (MCP `flow_start_guided`), or use CLI flags:
 

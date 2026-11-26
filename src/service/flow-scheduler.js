@@ -89,8 +89,18 @@ function readyNode(node, receipts) {
   return { ready: dependencies.every(Boolean) };
 }
 
+function skillPathsFor(node, run) {
+  const resolved = run.skillResolution?.skills;
+  if (!node.skills?.length || !resolved || !node.skills.every((name) => resolved[name])) return undefined;
+  return node.skills.map((name) => ({ name, path: resolved[name].path, sha256: resolved[name].sha256 }));
+}
+
+const BASE_TOOL_GUIDANCE = "Use only the Skills and MCPs declared by this node and allowed by the active profile.";
+const SKILL_PATH_GUIDANCE = `${BASE_TOOL_GUIDANCE} Skills are not installed globally: before doing the node work, read IN FULL every SKILL.md listed in skillPaths (and the references/ folder next to it when it exists) and apply it to this node. Each Skill applies only to this node; do not carry it to other nodes or rely on any other copy.`;
+
 function skillWarningsFor(node, run) {
   if (!node.skills?.length) return undefined;
+  if (skillPathsFor(node, run)) return undefined; // Loaded by explicit path, so Skill tool support is irrelevant.
   const runtime = node.executor ?? run.runtime;
   const skillToolAvailable = node.skillToolSupport?.[runtime];
   if (skillToolAvailable === true) return undefined;
@@ -157,9 +167,10 @@ export function planFlowNext(flow, run, receiptList) {
     variant: node.variant,
     executor: node.executor,
     skills: node.skills ?? [],
+    ...(skillPathsFor(node, run) ? { skillPaths: skillPathsFor(node, run) } : {}),
     ...(node.reusable === true ? { reusable: true } : {}),
     mcps: node.mcps ?? [],
-    toolGuidance: "Use only the Skills and MCPs declared by this node and allowed by the active profile.",
+    toolGuidance: skillPathsFor(node, run) ? SKILL_PATH_GUIDANCE : BASE_TOOL_GUIDANCE,
     constraints: node.constraints ?? [],
     prompt: renderPrompt(node.prompt ?? node.input ?? node.output, run, receipts, flow),
     output: node.output,

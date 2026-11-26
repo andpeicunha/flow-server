@@ -1,9 +1,9 @@
 import { execFile as execFileCallback } from "node:child_process";
 import { access } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
 import { promisify } from "node:util";
 import { LocalFlowClient } from "../mcp/local-client.js";
+import { defaultSkillRoots, locateSkill, skillNamePattern } from "../core/skill-resolver.js";
 import { registrationFor } from "../core/flow-tool-policy.js";
 import { FlowSourceService } from "./flow-source-service.js";
 
@@ -92,18 +92,19 @@ export async function diagnoseFlowSetup({ stateDir, sourceConfig, profileId, flo
 
   const skills = [...new Set(effective.flatMap(({ flow }) => flow.nodes?.flatMap((node) => node.skills ?? []) ?? []))].sort();
   const missing = [];
-  for (const { flow, runtime } of effective) for (const skill of new Set(flow.nodes?.flatMap((node) => node.skills ?? []) ?? [])) {
-    if (!/^[a-z][a-z0-9-]{0,127}$/.test(skill)) { missing.push(skill); continue; }
-    const roots = runtime === "claude" ? [join(homeDir, ".claude", "skills")]
-      : [join(homeDir, ".agents", "skills"), join(homeDir, ".codex", "skills")];
-    let found = false;
-    for (const root of roots) {
-      try { await fileAccess(join(root, skill, "SKILL.md")); found = true; break; }
-      catch { /* Try the next installed Skill directory. */ }
+  const missingDetails = [];
+  const searched = new Set();
+  for (const { flow, runtime, source } of effective) {
+    const roots = source?.skills?.roots ?? defaultSkillRoots(homeDir);
+    roots.forEach((root) => searched.add(root));
+    for (const skill of new Set(flow.nodes?.flatMap((node) => node.skills ?? []) ?? [])) {
+      if (await locateSkill(skill, roots, { exists: async (path) => { try { await fileAccess(path); return true; } catch { return false; } } })) continue;
+      missing.push(source?.skills?.roots || !skillNamePattern.test(skill) ? skill : `${runtime}:${skill}`);
+      missingDetails.push({ skill, runtime, roots, ...(skillNamePattern.test(skill) ? {} : { reason: "invalid name" }) });
     }
-    if (!found) missing.push(`${runtime}:${skill}`);
   }
-  checks.push({ name: "skills", status: entries.length && effective.length && !missing.length ? "passed" : "failed", declared: skills.length, missing: [...new Set(missing)].sort() });
+  checks.push({ name: "skills", status: entries.length && effective.length && !missing.length ? "passed" : "failed", declared: skills.length, missing: [...new Set(missing)].sort(),
+    ...(missingDetails.length ? { details: missingDetails } : {}), searchedRoots: [...searched] });
 
   const models = [...new Set(effective.flatMap(({ flow }) => flow.nodes?.map((node) => node.model).filter(Boolean) ?? []))].sort();
   checks.push({ name: "modelAccess", status: "not_tested", declared: models });

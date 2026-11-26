@@ -4,6 +4,7 @@ import { transitionRun } from "../core/lifecycle.js";
 import { isRfc3339DateTime } from "../core/date-time.js";
 import { fingerprintWorkspace } from "../core/workspace-context.js";
 import { validateOutput } from "../core/output-schema.js";
+import { hashSkillFile, locateSkill, resolveFlowSkills, skillMissingError } from "../core/skill-resolver.js";
 import { evaluateCondition, planFlowNext } from "./flow-scheduler.js";
 
 const publicRun = ({ workspace, flowDefinition, fallbackExecutions, executionProfileSnapshot, retry, ...run }) => run;
@@ -161,8 +162,15 @@ export class RunService {
     try { workspaceFingerprint = await this.getWorkspaceFingerprint(workspace); }
     catch { workspaceFingerprint = undefined; }
     if (reuseFromRunId && !workspaceFingerprint) throw new FlowError("REUSE_CONTEXT_UNAVAILABLE", "The destination workspace revision and OpenSpec context could not be verified.");
-    const taskHash = createHash("sha256").update(task ?? "").digest("hex");
     const flowDefinition = resolved.flowDefinition;
+    // Fail early and predictably: every Skill declared by every node (even nodes a condition may skip) must resolve before a run exists.
+    let skillResolution;
+    if (flowDefinition && Array.isArray(resolved.skillRoots)) {
+      const { skills, missing } = await resolveFlowSkills(flowDefinition, resolved.skillRoots);
+      if (missing.length) throw skillMissingError(missing, resolved.skillRoots);
+      if (Object.keys(skills).length) skillResolution = { roots: resolved.skillRoots, configured: resolved.skillRootsConfigured === true, skills };
+    }
+    const taskHash = createHash("sha256").update(task ?? "").digest("hex");
     const flowIdentityHash = createHash("sha256").update(JSON.stringify(flowDefinition ?? {})).digest("hex");
     const reuseContextHash = workspaceFingerprint ? createHash("sha256")
       .update([workspaceFingerprint.contextHash, workspaceFingerprint.openSpecHash, taskHash, flowIdentityHash,
@@ -177,6 +185,7 @@ export class RunService {
       ...(resolved.flowContentHash || flowContentHash ? { flowContentHash: resolved.flowContentHash ?? flowContentHash } : {}),
       ...(resolved.flowGitCommit || flowGitCommit ? { flowGitCommit: resolved.flowGitCommit ?? flowGitCommit } : {}),
       ...(resolved.flowDefinition ? { flowDefinition: resolved.flowDefinition } : {}),
+      ...(skillResolution ? { skillResolution } : {}),
       ...(resolved.executionProfileId ? { executionProfileId: resolved.executionProfileId, executionProfileSnapshot: resolved.executionProfileSnapshot,
         availableExecutionProfiles: resolved.availableExecutionProfiles, nodeExecutions: {} } : {}),
       ...(resolved.fallbackExecutions ? { fallbackExecutions: resolved.fallbackExecutions, nodeExecutions: {} } : {}),
@@ -713,6 +722,7 @@ export class RunService {
           changed = true;
         }
       }
+      if (await this.reverifySkills(run, result.nodes)) changed = true;
       run.skillCapabilityWarnings ??= {};
       for (const node of result.nodes) if (node.skillWarnings?.length) {
         run.skillCapabilityWarnings[node.id] = node.skillWarnings;
@@ -725,6 +735,35 @@ export class RunService {
       if (changed) await this.stateStore.writeRun(run);
     }
     return { ...result, ...(result.status === "ready" ? { nodes: this.readyNodesWithAttempt(result.nodes, run) } : {}), ...(skippedNodeIds.length ? { skipped: skippedNodeIds } : {}) };
+  }
+
+  // Re-checks the Skills of the nodes about to run against the pinned resolution. A Skill that vanished fails this call
+  // (run state untouched, so flow_next can be retried once it is restored); a changed SKILL.md is recorded with both hashes.
+  async reverifySkills(run, nodes) {
+    const resolution = run.skillResolution;
+    if (!resolution) return false;
+    const names = [...new Set(nodes.flatMap((node) => node.skills ?? []))].filter((name) => resolution.skills[name]);
+    const missing = [];
+    const updates = [];
+    for (const name of names) {
+      const found = await locateSkill(name, resolution.roots);
+      if (!found) { missing.push({ skill: name, nodes: nodes.filter((node) => node.skills?.includes(name)).map((node) => node.id), reason: "not found" }); continue; }
+      updates.push({ name, found, sha256: await hashSkillFile(found.path) });
+    }
+    if (missing.length) throw skillMissingError(missing, resolution.roots);
+    let changed = false;
+    for (const { name, found, sha256 } of updates) {
+      const entry = resolution.skills[name];
+      if (entry.sha256 === sha256 && entry.path === found.path) continue;
+      if (entry.sha256 !== sha256) {
+        (resolution.changes ??= []).push({ skill: name, previousSha256: entry.sha256, sha256, recordedAt: this.now() });
+        entry.previousSha256 = entry.sha256;
+      }
+      Object.assign(entry, { path: found.path, root: found.root, sha256 });
+      changed = true;
+    }
+    for (const node of nodes) if (node.skillPaths) node.skillPaths = node.skillPaths.map(({ name }) => ({ name, path: resolution.skills[name].path, sha256: resolution.skills[name].sha256 }));
+    return changed;
   }
 
   async planNextForRun(run) {
@@ -782,6 +821,7 @@ export class RunService {
     return { schemaVersion: "v1", runId: id, result, findings,
       ...(run.skillCapabilityWarnings && Object.keys(run.skillCapabilityWarnings).length ? { warnings: Object.entries(run.skillCapabilityWarnings).flatMap(([nodeId, items]) => items.map((item) => ({ nodeId, ...item }))) } : {}),
       ...(receipts.some((receipt) => receipt.reusedFrom) ? { reusedReceipts: receipts.filter((receipt) => receipt.reusedFrom).map((receipt) => ({ nodeId: receipt.nodeId, ...receipt.reusedFrom })) } : {}),
+      ...(run.skillResolution ? { skillResolution: run.skillResolution } : {}),
       ...(run.executionHistory?.length ? { executionHistory: run.executionHistory } : {}),
       ...(run.blockHistory?.length ? { blockHistory: run.blockHistory } : {}),
       ...(retryHistory.length ? { retryHistory: retryHistory.map((receipt) => ({ nodeId: receipt.nodeId, attempt: receipt.attempt ?? 1, status: receipt.status,

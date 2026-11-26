@@ -33,6 +33,15 @@
     "executionHistory": { "type": "array", "items": { "type": "object" } },
     "stop": { "type": "object" },
     "taskContextDelivered": { "type": "boolean" },
+    "skillResolution": {
+      "type": "object", "additionalProperties": false, "required": ["roots", "skills"],
+      "properties": {
+        "roots": { "type": "array", "items": { "type": "string" } },
+        "configured": { "type": "boolean" },
+        "skills": { "type": "object", "additionalProperties": { "type": "object", "additionalProperties": false, "required": ["path", "sha256"], "properties": { "path": { "type": "string" }, "root": { "type": "string" }, "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }, "nodes": { "type": "array", "items": { "type": "string" } }, "previousSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" } } } },
+        "changes": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["skill", "previousSha256", "sha256", "recordedAt"], "properties": { "skill": { "type": "string" }, "previousSha256": { "type": "string" }, "sha256": { "type": "string" }, "recordedAt": { "type": "string", "format": "date-time" } } } }
+      }
+    },
     "skillCapabilityWarnings": { "type": "object", "additionalProperties": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["code", "reason"], "properties": { "code": { "type": "string" }, "reason": { "type": "string" } } } } }
   },
   "allOf": [{ "if": { "required": ["flowSourceId"] }, "then": { "required": ["profileId"] } }]
