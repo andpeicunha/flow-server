@@ -23,6 +23,15 @@ function predecessorsOf(flow, nodeId) {
   return [...found].sort();
 }
 
+const APPROVAL_MAX = 2000;
+
+// The pending retry attempt swaps the node model for its retryModel (fallback runtime uses its own mapped retryModel).
+function retryModelFor(node, run) {
+  const selected = run.nodeExecutions?.[node?.id];
+  if (selected && selected.runtime !== run.runtime) return selected.retryModel;
+  return node?.retryModel;
+}
+
 export class RunService {
   constructor({ stateStore, flowResolver, now = () => new Date().toISOString(), createId = () => `run_${randomUUID()}`, getWorkspaceFingerprint = fingerprintWorkspace } = {}) {
     this.stateStore = stateStore;
@@ -92,9 +101,19 @@ export class RunService {
     return result.candidates ?? [];
   }
 
+  // Returns { userApproval, approvedAt } only when the limit is exceeded and a valid approval was given; throws on limit without approval.
+  retryLimitDecision(node, attempt, userApproval) {
+    if (attempt <= (node.retry ?? 3)) return {};
+    if (userApproval === undefined || userApproval === null) throw new FlowError("RETRY_LIMIT_REACHED", "This node has reached its configured retry limit. Ask the user for explicit approval and pass it as userApproval to allow one more attempt.");
+    if (typeof userApproval !== "string" || !userApproval.trim() || userApproval.length > APPROVAL_MAX) {
+      throw new FlowError("INVALID_RETRY_APPROVAL", "userApproval must be the user's own non-empty approval text, up to 2000 characters.");
+    }
+    return { userApproval: userApproval.trim(), approvedAt: this.now() };
+  }
+
   retryNode(id, review) { return this.lockRun(id, () => this.retryNodeUnlocked(id, review ?? {})); }
 
-  async retryNodeUnlocked(id, { nodeId, failedRecordedAt, workspace, reviewedNodeIds, worktreeReview, reason } = {}) {
+  async retryNodeUnlocked(id, { nodeId, failedRecordedAt, workspace, reviewedNodeIds, worktreeReview, reason, userApproval } = {}) {
     const run = await this.stateStore.readRun(id);
     if (run.status !== "running" && !(run.status === "blocked" && ["DEPENDENCY_FAILED", "NODE_FAILED"].includes(run.block?.reason))) throw new FlowError("RETRY_RUN_NOT_RUNNING", "Only a running run or one blocked by a failed node can retry. Resume a paused run first; terminal runs cannot retry.");
     if (run.retry) throw new FlowError("RETRY_ALREADY_PENDING", "Complete the pending node retry before requesting another.");
@@ -120,12 +139,12 @@ export class RunService {
       throw new FlowError("RETRY_REVIEW_INCOMPLETE", "Describe the current worktree evidence and why this node needs a retry.");
     }
     const attempt = failed.attempt ?? 1;
-    if (attempt > (node.retry ?? 3)) throw new FlowError("RETRY_LIMIT_REACHED", "This node has reached its configured retry limit.");
-    const retryDecision = { reason, worktreeReview, reviewedNodeIds: predecessors, requestedAt: this.now() };
+    const approval = this.retryLimitDecision(node, attempt, userApproval);
+    const retryDecision = { reason, worktreeReview, reviewedNodeIds: predecessors, requestedAt: this.now(), ...approval };
     const archivedDecision = await this.stateStore.archiveFailedReceipt(failed, retryDecision);
     run.retry = { nodeId, attempt: attempt + 1, ...archivedDecision };
     if (run.status === "blocked") {
-      run.blockHistory = [...(run.blockHistory ?? []), { ...run.block, resolution: reason, resolvedAt: this.now() }];
+      run.blockHistory = [...(run.blockHistory ?? []), { ...run.block, resolution: reason, resolvedAt: this.now(), ...approval }];
       delete run.block;
       run.status = transitionRun(run.status, "continue");
     }
@@ -408,7 +427,7 @@ export class RunService {
 
   continueRun(id, resolution) { return this.lockRun(id, () => this.continueRunUnlocked(id, resolution)); }
 
-  async continueRunUnlocked(id, { reason, workspace, worktreeReview, reviewedPredecessors } = {}) {
+  async continueRunUnlocked(id, { reason, workspace, worktreeReview, reviewedPredecessors, userApproval } = {}) {
     const run = await this.stateStore.readRun(id);
     if (run.status !== "blocked" || !run.block) throw new FlowError("RUN_NOT_BLOCKED", "This run has no open block.");
     if (typeof reason !== "string" || !reason.trim() || reason.length > 2000) throw new FlowError("INVALID_RESOLUTION", "Describe what fixed the block before continuing.");
@@ -434,16 +453,16 @@ export class RunService {
       }
       const node = run.flowDefinition.nodes.find((item) => item.id === nodeId);
       const attempt = current.attempt ?? 1;
-      if (attempt > (node.retry ?? 3)) throw new FlowError("RETRY_LIMIT_REACHED", "This node has reached its configured retry limit.");
+      const approval = this.retryLimitDecision(node, attempt, userApproval);
       if (run.retry) throw new FlowError("RETRY_ALREADY_PENDING", "Complete the pending node retry before requesting another.");
       const plannedRetry = planFlowNext(run.flowDefinition, run, receipts.filter((item) => item.nodeId !== nodeId));
       if (plannedRetry.status !== "ready" || !plannedRetry.nodes.some((item) => item.id === nodeId)) {
         throw new FlowError("BLOCK_NOT_RESOLVED", "The node is not ready after reviewing its predecessors.");
       }
-      const decision = { reason: reason.trim(), worktreeReview, reviewedNodeIds: predecessors, requestedAt: this.now() };
+      const decision = { reason: reason.trim(), worktreeReview, reviewedNodeIds: predecessors, requestedAt: this.now(), ...approval };
       const archivedDecision = await this.stateStore.archiveFailedReceipt(current, decision);
       run.retry = { nodeId, attempt: attempt + 1, ...archivedDecision };
-      run.blockHistory = [...(run.blockHistory ?? []), { ...run.block, resolution: reason.trim(), resolvedAt: this.now() }];
+      run.blockHistory = [...(run.blockHistory ?? []), { ...run.block, resolution: reason.trim(), resolvedAt: this.now(), ...approval }];
       delete run.block;
       run.status = transitionRun(run.status, "continue");
       await this.stateStore.writeRun(run);
@@ -457,7 +476,7 @@ export class RunService {
       await this.retryNodeUnlocked(id, {
         nodeId: failed.nodeId, failedRecordedAt: failed.recordedAt, workspace,
         reviewedNodeIds: predecessorsOf(run.flowDefinition, failed.nodeId),
-        worktreeReview, reason: reason.trim()
+        worktreeReview, reason: reason.trim(), userApproval
       });
       const resumed = await this.stateStore.readRun(id);
       const plannedRetry = planFlowNext(resumed.flowDefinition, resumed, receipts.filter((receipt) => receipt.nodeId !== failed.nodeId));
@@ -482,7 +501,10 @@ export class RunService {
       const selected = run.nodeExecutions?.[node.id];
       const result = selected ? { ...node, runtime: selected.runtime, executor: selected.runtime, model: selected.model,
         effort: selected.effort, attempt: selected.attempt } : node;
-      return run.retry?.nodeId === node.id ? { ...result, attempt: run.retry.attempt } : result;
+      if (run.retry?.nodeId !== node.id) return result;
+      const definition = run.flowDefinition?.nodes?.find((item) => item.id === node.id) ?? node;
+      const retryModel = retryModelFor(definition, run);
+      return { ...result, attempt: run.retry.attempt, ...(retryModel ? { model: retryModel } : {}) };
     });
   }
 
@@ -531,7 +553,8 @@ export class RunService {
       }
       const node = run.flowDefinition.nodes.find((item) => item.id === receipt.nodeId);
       if (receipt.status === "completed" && node?.model) {
-        const expectedModel = selectedExecution?.model ?? node.model;
+        const retryModel = run.retry?.nodeId === node.id ? retryModelFor(node, run) : undefined;
+        const expectedModel = retryModel ?? selectedExecution?.model ?? node.model;
         const actualModel = receipt.model;
         const modelMatches = actualModel === expectedModel || actualModel === expectedModel.split("/").at(-1);
         if (!modelMatches) throw new FlowError("NODE_MODEL_MISMATCH", "A completed node must record its configured model in the receipt.");
@@ -763,6 +786,7 @@ export class RunService {
       ...(run.blockHistory?.length ? { blockHistory: run.blockHistory } : {}),
       ...(retryHistory.length ? { retryHistory: retryHistory.map((receipt) => ({ nodeId: receipt.nodeId, attempt: receipt.attempt ?? 1, status: receipt.status,
         ...(receipt.status === "completed" && (run.flowDefinition?.stopWhen ?? []).some((rule) => rule.mode === "block" && rule.step === receipt.nodeId && evaluateCondition(rule, new Map([[receipt.nodeId, receipt]])).matches === true) ? { stopRuleBlocked: true } : {}),
-        recordedAt: receipt.recordedAt, reason: receipt.retryDecision?.reason, reviewedNodeIds: receipt.retryDecision?.reviewedNodeIds })) } : {}) };
+        recordedAt: receipt.recordedAt, reason: receipt.retryDecision?.reason, reviewedNodeIds: receipt.retryDecision?.reviewedNodeIds,
+        ...(receipt.retryDecision?.userApproval ? { userApproval: receipt.retryDecision.userApproval, approvedAt: receipt.retryDecision.approvedAt } : {}) })) } : {}) };
   }
 }

@@ -152,6 +152,7 @@ export function planFlowNext(flow, run, receiptList) {
     agent: node.agent,
     role: node.role,
     model: node.model,
+    ...(node.retryModel ? { retryModel: node.retryModel } : {}),
     effort: node.effort,
     variant: node.variant,
     executor: node.executor,

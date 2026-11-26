@@ -172,8 +172,14 @@ export class FlowSourceService {
           if (!Object.hasOwn(mapper.models, node.model)) throw new FlowError("NODE_MODEL_UNMAPPED", `Node ${node.id} has no model mapping for this execution profile.`);
           node.model = mapper.models[node.model];
         }
-        if ((selectedRuntime === "claude" && node.model?.startsWith("openai/")) || (selectedRuntime === "codex" && node.model?.startsWith("anthropic/"))) {
-          throw new FlowError("NODE_MODEL_UNMAPPED", `Node ${node.id} has a model incompatible with ${selectedRuntime}.`);
+        if (node.retryModel && mapper.models) {
+          if (!Object.hasOwn(mapper.models, node.retryModel)) throw new FlowError("NODE_MODEL_UNMAPPED", `Node ${node.id} has no retryModel mapping for this execution profile.`);
+          node.retryModel = mapper.models[node.retryModel];
+        }
+        for (const candidate of [node.model, node.retryModel]) {
+          if ((selectedRuntime === "claude" && candidate?.startsWith("openai/")) || (selectedRuntime === "codex" && candidate?.startsWith("anthropic/"))) {
+            throw new FlowError("NODE_MODEL_UNMAPPED", `Node ${node.id} has a model incompatible with ${selectedRuntime}.`);
+          }
         }
         const effort = node.effort ?? node.variant;
         if (effort && mapper.efforts && Object.hasOwn(mapper.efforts, effort)) {
@@ -186,7 +192,13 @@ export class FlowSourceService {
           const override = Object.hasOwn(fallback.agents ?? {}, node.agent) ? fallback.agents[node.agent] : undefined;
           const fallbackModel = override?.model ?? fallback.models[node.model];
           if (!fallbackModel) throw new FlowError("FALLBACK_MODEL_UNMAPPED", `Node ${node.id} has no fallback model for this machine.`);
+          let fallbackRetryModel;
+          if (node.retryModel) {
+            fallbackRetryModel = override?.retryModel ?? fallback.models[node.retryModel];
+            if (!fallbackRetryModel) throw new FlowError("FALLBACK_MODEL_UNMAPPED", `Node ${node.id} has no fallback model for its retryModel on this machine.`);
+          }
           fallbackExecutions[node.id] = { runtime: fallback.runtime, model: fallbackModel,
+            ...(fallbackRetryModel ? { retryModel: fallbackRetryModel } : {}),
             effort: override?.effort ?? node.effort ?? node.variant ?? "medium" };
         }
       }

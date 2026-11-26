@@ -8,7 +8,7 @@ const identifier = /^[a-z][a-z0-9-]{0,62}$/;
 const nodeIdentifier = /^[a-z][a-z0-9_-]{0,62}$/;
 const safeText = (value, max = 64 * 1024) => typeof value === "string" && value.length <= max;
 const rootKeys = new Set(["schemaVersion", "id", "name", "title", "description", "keepAwake", "route", "routing", "stopWhen", "nodes", "taskContext"]);
-const nodeKeys = new Set(["id", "title", "after", "dependsOn", "agent", "role", "model", "effort", "variant", "executor", "skills", "mcps", "constraints", "prompt", "input", "output", "outputSchema", "when", "evidencePolicy", "timeout", "retry", "parallelSafe", "reusable", "skillToolSupport"]);
+const nodeKeys = new Set(["id", "title", "after", "dependsOn", "agent", "role", "model", "retryModel", "effort", "variant", "executor", "skills", "mcps", "constraints", "prompt", "input", "output", "outputSchema", "when", "evidencePolicy", "timeout", "retry", "parallelSafe", "reusable", "skillToolSupport"]);
 const stopKeys = new Set(["step", "jsonPath", "equals", "notEquals", "in", "notIn", "status", "next", "mode"]);
 const whenKeys = new Set(["step", "jsonPath", "equals", "notEquals", "in", "notIn"]);
 export const flowDocumentLimits = Object.freeze({ bytes: 256 * 1024, depth: 32, scalarLength: 64 * 1024, collectionLength: 2048, nodes: 256 });
@@ -94,6 +94,7 @@ export function validateFlowDocument(input) {
   const nodeIds = new Set();
   for (const node of value.nodes) {
     const dependencies = node?.after ?? node?.dependsOn;
+    if (node && typeof node === "object" && node.retryModel !== undefined && !(typeof node.model === "string" && node.model.length > 0)) fail(`Flow node ${node.id} sets retryModel without a model.`);
     const validNode = node && typeof node === "object" && !Array.isArray(node) && exactKeys(node, nodeKeys)
       && nodeIdentifier.test(node.id)
       && (node.title === undefined || (safeText(node.title, 160) && node.title.length > 0))
@@ -101,7 +102,8 @@ export function validateFlowDocument(input) {
       && (node.dependsOn === undefined || Array.isArray(node.dependsOn))
       && !(node.after !== undefined && node.dependsOn !== undefined)
       && (dependencies === undefined || (new Set(dependencies).size === dependencies.length && dependencies.every((id) => nodeIdentifier.test(id))))
-      && ["agent", "role", "model", "effort", "variant", "executor", "prompt", "input", "output", "evidencePolicy"].every((key) => node[key] === undefined || safeText(node[key], key === "prompt" || key === "input" ? 64 * 1024 : 4096))
+      && ["agent", "role", "model", "retryModel", "effort", "variant", "executor", "prompt", "input", "output", "evidencePolicy"].every((key) => node[key] === undefined || safeText(node[key], key === "prompt" || key === "input" ? 64 * 1024 : 4096))
+      && (node.retryModel === undefined || (typeof node.model === "string" && node.model.length > 0))
       && (node.outputSchema === undefined || isValidOutputSchema(node.outputSchema))
       && ["skills", "constraints"].every((key) => node[key] === undefined || validStringList(node[key], { maxItems: 128, maxLength: 4096 }))
       && (node.mcps === undefined || (Array.isArray(node.mcps) && node.mcps.length <= 64 && new Set(node.mcps).size === node.mcps.length && node.mcps.every(validToolName)))

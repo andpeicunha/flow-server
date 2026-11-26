@@ -150,7 +150,7 @@ export class FileStateStore {
       const existing = await this.readJson(target);
       const { retryDecision: existingDecision, ...existingReceipt } = existing;
       const { retryDecision: proposedDecision, ...proposedReceipt } = archived;
-      const withoutTime = ({ requestedAt, ...decision } = {}) => decision;
+      const withoutTime = ({ requestedAt, approvedAt, ...decision } = {}) => decision;
       if (JSON.stringify(existingReceipt) !== JSON.stringify(proposedReceipt) ||
         JSON.stringify(withoutTime(existingDecision)) !== JSON.stringify(withoutTime(proposedDecision))) {
         throw new TypeError("Archived attempt differs from the current receipt or review.");

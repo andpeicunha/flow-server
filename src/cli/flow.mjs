@@ -16,7 +16,7 @@ function help() {
   flow next <run-id>
   flow block <run-id> <node-id> --reason "..." [--rate-limit]
   flow switch-runtime <run-id> <node-id> --execution-profile <id> --reason "..." --workspace <path> --worktree-review "..." --reviewed-predecessors
-  flow continue <run-id> --reason "..." [--workspace <path> --worktree-review "..." --reviewed-predecessors]
+  flow continue <run-id> --reason "..." [--workspace <path> --worktree-review "..." --reviewed-predecessors] [--user-approval "<user text, only after retry limit>"]
   flow start --flow <id> --workspace <path> --mode guided [--reuse-from <run-id> --reuse-nodes <id,id,...>]
 
 Rate-limit recovery:
@@ -54,7 +54,7 @@ function parse(argumentsList) {
     values[item] = value;
     index += 1;
   }
-  const allowed = new Set(["--state-dir", "--flow", "--profile", "--execution-profile", "--task", "--workspace", "--runtime", "--mode", "--receipt", "--approve-host-adapter", "--last", "--since", "--content-hash", "--compare-versions", "--node", "--reason", "--worktree-review", "--rate-limit", "--reviewed-predecessors", "--reuse-from", "--reuse-nodes"]);
+  const allowed = new Set(["--state-dir", "--flow", "--profile", "--execution-profile", "--task", "--workspace", "--runtime", "--mode", "--receipt", "--approve-host-adapter", "--last", "--since", "--content-hash", "--compare-versions", "--node", "--reason", "--worktree-review", "--rate-limit", "--reviewed-predecessors", "--user-approval", "--reuse-from", "--reuse-nodes"]);
   const unexpected = Object.keys(values).find((key) => !allowed.has(key));
   if (unexpected) throw new Error(`Unsupported option: ${unexpected}`);
   return { positional, values };
@@ -146,7 +146,8 @@ async function main() {
       reason: requireOption(values, "--reason"),
       ...(values["--workspace"] ? { workspace: values["--workspace"] } : {}),
       ...(values["--worktree-review"] ? { worktreeReview: values["--worktree-review"] } : {}),
-      ...(values["--reviewed-predecessors"] ? { reviewedPredecessors: true } : {})
+      ...(values["--reviewed-predecessors"] ? { reviewedPredecessors: true } : {}),
+      ...(values["--user-approval"] !== undefined ? { userApproval: values["--user-approval"] } : {})
     };
     return console.log(JSON.stringify(await request(client, `/v1/runs/${encodeURIComponent(runId)}/continue`, { method: "POST", body, mutate: true })));
   }
