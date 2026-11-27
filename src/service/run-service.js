@@ -249,6 +249,7 @@ export class RunService {
       const original = sourceReceipts.get(nodeId);
       const receipt = { ...original, runId: run.id, recordedAt: this.now(), attempt: 1,
         reusedFrom: { runId: sourceRunId, nodeId, contextHash: run.reuseContextHash } };
+      delete receipt.serverTiming; // timing belongs to the source run, not to this reuse
       if (original.output?.reportPath && original.output.reportSha256) {
         const sourceReport = await this.stateStore.readReport(sourceRunId, original.output.reportPath);
         if (sourceReport.reportSha256 !== original.output.reportSha256) throw new FlowError("REUSE_REPORT_INVALID", `The source report for node ${nodeId} has changed.`);
@@ -360,6 +361,7 @@ export class RunService {
     delete run.block;
     run.status = transitionRun(run.status, "continue");
     await this.stateStore.writeRun(run);
+    await this.recordDispatches(run, planned.nodes.filter((item) => item.id === nodeId));
     return { ...publicRun(run), next: this.readyNodesWithAttempt(planned.nodes.filter((item) => item.id === nodeId), run) };
   }
 
@@ -431,6 +433,7 @@ export class RunService {
     run.status = transitionRun(run.status, "continue");
     await this.stateStore.writeRun(run);
     const planned = planFlowNext(run.flowDefinition, run, receipts);
+    if (planned.status === "ready") await this.recordDispatches(run, planned.nodes);
     return { ...publicRun(run), next: planned.status === "ready" ? this.readyNodesWithAttempt(planned.nodes, run) : [] };
   }
 
@@ -475,6 +478,7 @@ export class RunService {
       delete run.block;
       run.status = transitionRun(run.status, "continue");
       await this.stateStore.writeRun(run);
+      await this.recordDispatches(run, plannedRetry.nodes.filter((item) => item.id === nodeId));
       return { ...publicRun(run), next: this.readyNodesWithAttempt(plannedRetry.nodes.filter((item) => item.id === nodeId), run) };
     }
     if (failures.length) {
@@ -490,6 +494,7 @@ export class RunService {
       const resumed = await this.stateStore.readRun(id);
       const plannedRetry = planFlowNext(resumed.flowDefinition, resumed, receipts.filter((receipt) => receipt.nodeId !== failed.nodeId));
       if (plannedRetry.status !== "ready") throw new FlowError("BLOCK_NOT_RESOLVED", "The failed node is still not ready after the retry review.");
+      await this.recordDispatches(resumed, plannedRetry.nodes);
       return { ...publicRun(resumed), next: this.readyNodesWithAttempt(plannedRetry.nodes, resumed) };
     }
     const planned = planFlowNext(run.flowDefinition, run, receipts);
@@ -502,7 +507,26 @@ export class RunService {
     delete run.block;
     run.status = transitionRun(run.status, "continue");
     await this.stateStore.writeRun(run);
+    if (planned.status === "ready") await this.recordDispatches(run, planned.nodes);
     return { ...publicRun(run), next: planned.status === "ready" ? planned.nodes : [] };
+  }
+
+  // Server-owned delivery time per (node, attempt), first record wins. Tolerates stores without dispatch support.
+  async recordDispatches(run, nodes) {
+    if (!this.stateStore.writeDispatch || !nodes.length) return;
+    const dispatchedAt = this.now();
+    for (const node of this.readyNodesWithAttempt(nodes, run)) {
+      const attempt = node.attempt ?? 1;
+      await this.stateStore.writeDispatch(run.id, node.id, attempt, { schemaVersion: "v1", runId: run.id, nodeId: node.id, attempt, dispatchedAt });
+    }
+  }
+
+  async serverTimingFor(runId, nodeId, attempt) {
+    const dispatch = this.stateStore.readDispatch ? await this.stateStore.readDispatch(runId, nodeId, attempt) : undefined;
+    const checkpointedAt = this.now();
+    const dispatchedAt = typeof dispatch?.dispatchedAt === "string" ? dispatch.dispatchedAt : null;
+    const elapsed = dispatchedAt ? Date.parse(checkpointedAt) - Date.parse(dispatchedAt) : NaN;
+    return { dispatchedAt, checkpointedAt, durationMs: Number.isInteger(elapsed) && elapsed >= 0 ? elapsed : null };
   }
 
   readyNodesWithAttempt(nodes, run) {
@@ -547,6 +571,7 @@ export class RunService {
     if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) throw new FlowError("INVALID_RECEIPT", "Receipt must be a JSON object.");
     if (receipt.runId !== id) throw new FlowError("INVALID_RECEIPT", "Receipt runId does not match the target run.");
     if (receipt.reusedFrom !== undefined) throw new FlowError("INVALID_RECEIPT", "Only flow-server may create a reused receipt.");
+    if (receipt.serverTiming !== undefined) throw new FlowError("INVALID_RECEIPT", "serverTiming is recorded by flow-server only.");
     if (run.retry && (receipt.nodeId !== run.retry.nodeId || receipt.attempt !== run.retry.attempt)) {
       throw new FlowError("RETRY_ATTEMPT_REQUIRED", "Checkpoint the pending retry node with its required attempt number first.");
     }
@@ -586,7 +611,8 @@ export class RunService {
       catch { throw new FlowError("REPORT_INVALID", "The referenced report is missing or invalid."); }
       if (report.reportSha256 !== receipt.output.reportSha256) throw new FlowError("REPORT_HASH_MISMATCH", "The referenced report digest does not match the stored report.");
     }
-    await this.stateStore.writeReceipt(receipt);
+    const serverTiming = await this.serverTimingFor(id, receipt.nodeId, receipt.attempt ?? 1);
+    await this.stateStore.writeReceipt({ ...receipt, serverTiming });
     const hadRetry = Boolean(run.retry);
     if (hadRetry) {
       delete run.retry;
@@ -733,6 +759,7 @@ export class RunService {
         changed = true;
       }
       if (changed) await this.stateStore.writeRun(run);
+      await this.recordDispatches(run, result.nodes);
     }
     return { ...result, ...(result.status === "ready" ? { nodes: this.readyNodesWithAttempt(result.nodes, run) } : {}), ...(skippedNodeIds.length ? { skipped: skippedNodeIds } : {}) };
   }
@@ -826,7 +853,7 @@ export class RunService {
       ...(run.blockHistory?.length ? { blockHistory: run.blockHistory } : {}),
       ...(retryHistory.length ? { retryHistory: retryHistory.map((receipt) => ({ nodeId: receipt.nodeId, attempt: receipt.attempt ?? 1, status: receipt.status,
         ...(receipt.status === "completed" && (run.flowDefinition?.stopWhen ?? []).some((rule) => rule.mode === "block" && rule.step === receipt.nodeId && evaluateCondition(rule, new Map([[receipt.nodeId, receipt]])).matches === true) ? { stopRuleBlocked: true } : {}),
-        recordedAt: receipt.recordedAt, reason: receipt.retryDecision?.reason, reviewedNodeIds: receipt.retryDecision?.reviewedNodeIds,
+        recordedAt: receipt.recordedAt, ...(receipt.serverTiming ? { serverTiming: receipt.serverTiming } : {}), reason: receipt.retryDecision?.reason, reviewedNodeIds: receipt.retryDecision?.reviewedNodeIds,
         ...(receipt.retryDecision?.userApproval ? { userApproval: receipt.retryDecision.userApproval, approvedAt: receipt.retryDecision.approvedAt } : {}) })) } : {}) };
   }
 }
