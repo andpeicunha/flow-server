@@ -90,6 +90,8 @@ test("flow_checkpoint advertises the receipt contract and rejects flattened node
   assert.equal(validate({ runId: "run_example", receipt: { ...receipt, decision: "continue" } }), false);
   assert.equal(validate({ runId: "run_example", receipt: { ...receipt, recordedAt: undefined } }), false);
   assert.equal(validate({ runId: "run_example", receipt: { ...receipt, schemaVersion: undefined } }), false);
+  assert.equal(validate({ runId: "run_example", receipt: { ...receipt, serverTiming: { dispatchedAt: null, checkpointedAt: "2026-11-02T14:00:00Z", durationMs: null } } }), false);
+  assert.equal("serverTiming" in schema.properties.receipt.properties, false);
 });
 
 test("flow-mcp answers JSON-RPC request id zero", async () => {
