@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { FileStateStore } from "../src/core/state-store.js";
+import { FlowError } from "../src/core/errors.js";
 import { RunService } from "../src/service/run-service.js";
 
 const workspace = "/work/server-timing";
@@ -179,6 +180,29 @@ test("C7 a caller-supplied serverTiming is rejected", async () => {
     const forged = { dispatchedAt: T0, checkpointedAt: T1, durationMs: 1 };
     await assert.rejects(service.checkpoint(runId, receipt(runId, "build", { serverTiming: forged })), { code: "INVALID_RECEIPT" });
     assert.equal(await receiptOf(store, runId, "build"), undefined);
+    await assert.rejects(service.checkpoint(runId, receipt(runId, "build", { serverTiming: forged })),
+      { code: "INVALID_RECEIPT", message: "serverTiming is recorded by flow-server only." });
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("C7b checkpoint with an out-of-range or non-integer attempt fails with a FlowError, not an internal error", async () => {
+  const { directory, store, service, runId } = await fixture();
+  try {
+    await service.next(runId);
+    for (const attempt of [0, 101, 1.5]) {
+      await assert.rejects(service.checkpoint(runId, receipt(runId, "build", { attempt })), (error) => error instanceof FlowError && typeof error.code === "string");
+    }
+    assert.equal(await receiptOf(store, runId, "build"), undefined);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("C12 a failing dispatch write does not stop flow_next from delivering the node", async () => {
+  const { directory, store, service, runId } = await fixture();
+  try {
+    store.writeDispatch = async () => { throw new Error("disk full"); };
+    const result = await service.next(runId);
+    assert.equal(result.status, "ready");
+    assert.deepEqual(result.nodes.map((node) => node.id), ["build"]);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 

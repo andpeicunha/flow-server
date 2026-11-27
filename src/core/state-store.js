@@ -32,7 +32,7 @@ export class FileStateStore {
 
   dispatchPath(runId, nodeId, attempt) {
     if (typeof nodeId !== "string" || !/^[a-z][a-z0-9_-]{0,62}$/.test(nodeId)) throw new TypeError("Invalid node id.");
-    if (!Number.isInteger(attempt) || attempt < 1 || attempt > 101) throw new TypeError("Invalid dispatch attempt.");
+    if (!Number.isInteger(attempt) || attempt < 1 || attempt > 100) throw new TypeError("Invalid dispatch attempt.");
     return join(this.runDirectory(runId), `dispatch-${nodeId}-${attempt}.json`);
   }
 

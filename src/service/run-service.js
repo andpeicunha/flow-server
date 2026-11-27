@@ -512,17 +512,24 @@ export class RunService {
   }
 
   // Server-owned delivery time per (node, attempt), first record wins. Tolerates stores without dispatch support.
+  // Best-effort: a failed write must never block flow_next, flow_continue or switch.
   async recordDispatches(run, nodes) {
     if (!this.stateStore.writeDispatch || !nodes.length) return;
     const dispatchedAt = this.now();
     for (const node of this.readyNodesWithAttempt(nodes, run)) {
       const attempt = node.attempt ?? 1;
-      await this.stateStore.writeDispatch(run.id, node.id, attempt, { schemaVersion: "v1", runId: run.id, nodeId: node.id, attempt, dispatchedAt });
+      try {
+        await this.stateStore.writeDispatch(run.id, node.id, attempt, { schemaVersion: "v1", runId: run.id, nodeId: node.id, attempt, dispatchedAt });
+      } catch { /* timing is advisory; the node is still delivered */ }
     }
   }
 
+  // Best-effort: any read failure or out-of-range attempt yields null timing; the checkpoint is never rejected for it.
   async serverTimingFor(runId, nodeId, attempt) {
-    const dispatch = this.stateStore.readDispatch ? await this.stateStore.readDispatch(runId, nodeId, attempt) : undefined;
+    let dispatch;
+    if (this.stateStore.readDispatch && Number.isInteger(attempt) && attempt >= 1 && attempt <= 100) {
+      try { dispatch = await this.stateStore.readDispatch(runId, nodeId, attempt); } catch { dispatch = undefined; }
+    }
     const checkpointedAt = this.now();
     const dispatchedAt = typeof dispatch?.dispatchedAt === "string" ? dispatch.dispatchedAt : null;
     const elapsed = dispatchedAt ? Date.parse(checkpointedAt) - Date.parse(dispatchedAt) : NaN;

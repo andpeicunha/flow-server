@@ -475,6 +475,7 @@ Node receipts may record bounded duration, attempt, declared agent/model,
 effort, optional runtime token counts (`tokenUsage.inputTokens` and
 `tokenUsage.outputTokens`), Skills, deterministic validation, and passive review signals. Missing token counts are unknown; the service cannot verify the runtime source. Signals
 are advisory and must set `affectsRun: false`; they never change an active run.
+`serverTiming` is written only by the server at checkpoint; `contracts/v1/receipt.schema.json` describes only the checkpoint input.
 
 An explicit post-run review uses only local deterministic aggregation.
 
