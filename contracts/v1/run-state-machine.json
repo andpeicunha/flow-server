@@ -9,7 +9,7 @@
     "schemaVersion": { "const": "v1" },
     "states": {
       "type": "array",
-      "const": ["created", "running", "paused", "stopped", "completed", "failed"]
+      "const": ["created", "running", "paused", "blocked", "stopped", "completed", "failed"]
     },
     "transitions": {
       "type": "array",
@@ -18,9 +18,9 @@
         "additionalProperties": false,
         "required": ["from", "action", "to"],
         "properties": {
-          "from": { "enum": ["created", "running", "paused"] },
-          "action": { "enum": ["start", "pause", "resume", "stop", "complete", "fail"] },
-          "to": { "enum": ["running", "paused", "stopped", "completed", "failed"] }
+          "from": { "enum": ["created", "running", "paused", "blocked"] },
+          "action": { "enum": ["start", "pause", "resume", "block", "continue", "stop", "complete", "fail"] },
+          "to": { "enum": ["running", "paused", "blocked", "stopped", "completed", "failed"] }
         }
       }
     }
@@ -28,16 +28,19 @@
   "examples": [
     {
       "schemaVersion": "v1",
-      "states": ["created", "running", "paused", "stopped", "completed", "failed"],
+      "states": ["created", "running", "paused", "blocked", "stopped", "completed", "failed"],
       "transitions": [
         { "from": "created", "action": "start", "to": "running" },
         { "from": "created", "action": "stop", "to": "stopped" },
         { "from": "running", "action": "pause", "to": "paused" },
+        { "from": "running", "action": "block", "to": "blocked" },
         { "from": "running", "action": "stop", "to": "stopped" },
         { "from": "running", "action": "complete", "to": "completed" },
         { "from": "running", "action": "fail", "to": "failed" },
         { "from": "paused", "action": "resume", "to": "running" },
-        { "from": "paused", "action": "stop", "to": "stopped" }
+        { "from": "paused", "action": "stop", "to": "stopped" },
+        { "from": "blocked", "action": "continue", "to": "running" },
+        { "from": "blocked", "action": "stop", "to": "stopped" }
       ]
     }
   ]

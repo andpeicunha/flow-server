@@ -1,16 +1,44 @@
 import readline from "node:readline";
+import receiptContract from "../../contracts/v1/receipt.schema.json" with { type: "json" };
 import { FlowError } from "../core/errors.js";
 
 const identifier = { type: "string", pattern: "^[a-z][a-z0-9-]{0,62}$" };
 const runId = { type: "string", pattern: "^run_[a-z0-9-]{1,63}$" };
+const checkpointReceipt = {
+  type: "object",
+  additionalProperties: false,
+  required: receiptContract.required,
+  properties: { ...receiptContract.properties, status: { enum: ["completed", "failed"] } }
+};
 
 export const tools = Object.freeze([
-  { name: "flow_list", description: "List flow metadata from the local loopback service.", inputSchema: { type: "object", additionalProperties: false, properties: {} } },
+  { name: "flow_list", description: "List local flow metadata, optionally scoped to one private profile.", inputSchema: { type: "object", additionalProperties: false, properties: { profileId: identifier } } },
+  { name: "flow_select", description: "Resolve the workspace profile and flow. If decision is needs_confirmation, ask the developer before starting a run. When executionProfiles are returned, select one (or use defaultExecutionProfileId) and pass its ID to flow_start_guided as executionProfileId.", inputSchema: { type: "object", additionalProperties: false, required: ["workspace"], properties: { profileId: identifier, flowId: identifier, workspace: { type: "string", minLength: 1, maxLength: 4096 }, task: { type: "string", maxLength: 65536 } } } },
   { name: "flow_inspect", description: "Inspect one redacted local run.", inputSchema: { type: "object", additionalProperties: false, required: ["runId"], properties: { runId } } },
-  { name: "flow_start_guided", description: "Create a guided run. It never starts a host adapter.", inputSchema: { type: "object", additionalProperties: false, required: ["flowId", "workspace", "runtime"], properties: { flowId: identifier, workspace: { type: "string", minLength: 1, maxLength: 4096 }, runtime: { enum: ["codex", "claude"] } } } },
-  { name: "flow_next", description: "Reserved for a future local scheduler. This version fails closed.", inputSchema: { type: "object", additionalProperties: false, required: ["runId"], properties: { runId } } },
-  { name: "flow_checkpoint", description: "Write one redacted receipt to an active local run.", inputSchema: { type: "object", additionalProperties: false, required: ["runId", "receipt"], properties: { runId, receipt: { type: "object" } } } },
+  { name: "flow_retry_inspect", description: "Read-only preflight for retrying a blocked node. For RATE_LIMIT, check runStatus, selectedExecution, executionProfileId, availableExecutionProfiles (pinned), currentSourceExecutionProfiles (current source, not pinned), fallbackExecution, pinned workspace, predecessor receipts, otherFailures, retryPending, and history. Review the actual pinned worktree for partial changes too. This does not change the run.", inputSchema: { type: "object", additionalProperties: false, required: ["runId", "nodeId"], properties: { runId, nodeId: identifier } } },
+  { name: "flow_retry_node", description: "Advanced retry operation kept for existing clients. For a blocked guided run, use flow_continue. This operation needs a prior flow_retry_inspect and the full failed receipt and predecessor review.", inputSchema: { type: "object", additionalProperties: false, required: ["runId", "nodeId", "failedRecordedAt", "workspace", "reviewedNodeIds", "worktreeReview", "reason"], properties: { runId, nodeId: identifier, failedRecordedAt: { type: "string", format: "date-time" }, workspace: { type: "string", minLength: 1, maxLength: 4096 }, reviewedNodeIds: { type: "array", maxItems: 128, items: identifier }, worktreeReview: { type: "string", minLength: 1, maxLength: 2000 }, reason: { type: "string", minLength: 1, maxLength: 2000 } } } },
+  { name: "flow_block", description: "Record a resolvable problem before the pending node has a receipt. For a real provider rate limit, set reasonCode RATE_LIMIT. If the run is already blocked, inspect it instead of blocking again. The run waits for an explicit resolution; a rate limit is not a completed checkpoint.", inputSchema: { type: "object", additionalProperties: false, required: ["runId", "nodeId", "reason"], properties: { runId, nodeId: identifier, reasonCode: { const: "RATE_LIMIT" }, reason: { type: "string", minLength: 1, maxLength: 2000 } } } },
+  { name: "flow_switch_runtime", description: "Same-run recovery for a real RATE_LIMIT only. Inspect the run and blocked node, review the pinned workspace and all predecessors, then pass an available executionProfileId different from the current profile. This changes the selected profile for the blocked node and every remaining uncompleted node, preserves prior receipts, and records the switch. Use the returned runtime, model, effort, and attempt for the next checkpoint. If any review fails or there is no alternate execution profile, do not switch or start a replacement run. A pinned legacy fallback takes precedence when executionProfileId is omitted. For legacy runs, retry inspection labels currentSourceExecutionProfiles as current-source candidates, not pinned profiles.", inputSchema: { type: "object", additionalProperties: false, required: ["runId", "nodeId", "reason", "workspace", "worktreeReview", "reviewedPredecessors"], properties: { runId, nodeId: identifier, executionProfileId: identifier, reason: { type: "string", minLength: 1, maxLength: 2000 }, workspace: { type: "string", minLength: 1, maxLength: 4096 }, worktreeReview: { type: "string", minLength: 1, maxLength: 2000 }, reviewedPredecessors: { const: true } } } },
+  { name: "flow_continue", description: "Main path after the cause of a block is resolved. Keep the same run and prior checkpoints. For RATE_LIMIT, inspect the run and retry context. If another execution profile is available, use flow_switch_runtime after reviewing the pinned worktree and predecessors. Otherwise continue only after the primary runtime's provider access has actually been restored, or use the pinned legacy fallback when one exists. If it has not, leave the run blocked; do not switch or start a replacement run. For a failed receipt or stopWhen block, inspect the pinned workspace and predecessors before continuing.", inputSchema: { type: "object", additionalProperties: false, required: ["runId", "reason"], properties: { runId, reason: { type: "string", minLength: 1, maxLength: 2000 }, workspace: { type: "string", minLength: 1, maxLength: 4096 }, worktreeReview: { type: "string", minLength: 1, maxLength: 2000 }, reviewedPredecessors: { const: true }, userApproval: { type: "string", minLength: 1, maxLength: 2000, description: "Only after the retry limit is reached. Must be the user's own explicit approval text, quoted verbatim from the conversation. Never fill this on your own; ask the user first." } } } },
+  {
+    name: "flow_start_guided",
+    description: "Create a guided run for an explicitly selected or uniquely workspace-mapped flow. Call flow_select first when profile or flow is uncertain. If executionProfiles are returned, pass the selected executionProfileId; a default profile can be used when provided. Optional reuse requires both reuseFromRunId and reuseNodeIds and passes strict context checks. It never starts a host adapter.",
+    inputSchema: {
+      type: "object", additionalProperties: false, required: ["flowId", "workspace"],
+      properties: { flowId: identifier, profileId: identifier, executionProfileId: identifier, workspace: { type: "string", minLength: 1, maxLength: 4096 }, runtime: { enum: ["codex", "claude"] }, task: { type: "string", maxLength: 65536 }, reuseFromRunId: runId, reuseNodeIds: { type: "array", minItems: 1, maxItems: 128, uniqueItems: true, items: { type: "string", pattern: "^[a-z][a-z0-9_-]{0,62}$" } } }
+    }
+  },
+  { name: "flow_next", description: "Return ready nodes after recording each node runtime and model choice in the run. Honor dependencies, conditions, and stop rules. All independent ready nodes in one response may run in parallel. Run each using its returned agent, runtime, model, effort, executor, declared Skills and MCPs, constraints, warnings, and prompt. When a node returns skillPaths, read each listed SKILL.md in full before the node work and apply it to that node only. Use only the declared tools allowed by the active profile.", inputSchema: { type: "object", additionalProperties: false, required: ["runId"], properties: { runId } } },
+  { name: "flow_report_write", description: "Write one bounded JSON report for a ready node under its run dossier. Returns the relative reportPath and SHA-256 digest to record in receipt.output. It cannot write arbitrary workspace paths or overwrite a different report.", inputSchema: { type: "object", additionalProperties: false, required: ["runId", "nodeId", "report"], properties: { runId, nodeId: { type: "string", pattern: "^[a-z][a-z0-9_-]{0,62}$" }, report: { type: "object", maxProperties: 2048 } } } },
+  { name: "flow_report_read", description: "Read a previously checkpointed report by run and node ID. Use only when its summary is insufficient. Returns the report and verified SHA-256 digest; it does not expose arbitrary files.", inputSchema: { type: "object", additionalProperties: false, required: ["runId", "nodeId"], properties: { runId, nodeId: { type: "string", pattern: "^[a-z][a-z0-9_-]{0,62}$" } } } },
+  { name: "flow_lifecycle", description: "Pause, resume, stop, or fail a local guided run. Completion is set automatically when all required nodes finish.", inputSchema: { type: "object", additionalProperties: false, required: ["runId", "action"], properties: { runId, action: { enum: ["pause", "resume", "stop", "fail"] } } } },
+  {
+    name: "flow_checkpoint",
+    description: "Record the real result of one ready node. The outer runId and receipt.runId must match. Receipt requires schemaVersion 'v1', nodeId, status 'completed' or 'failed', and an RFC 3339 recordedAt timestamp. Put node answers such as decision, reason, next, and evidence inside receipt.output. For a substantial report, include reportPath and reportSha256 from flow_report_write with a concise summary in output; later agents can use flow_report_read. Nodes with outputSchema must match the pinned JSON Schema. For a completed node with a configured model, record the matching model and effort. For a run with fallback configured, record the selected runtime on every node receipt. On retry or runtime switch, include the attempt number returned by flow_continue, flow_switch_runtime, or flow_next. Do not invent evidence or token counts. Skips belong to flow_next. Example receipt: {schemaVersion:'v1',runId:'run_example',nodeId:'gate0_check',status:'completed',recordedAt:'2026-01-01T00:00:00Z',model:'provider/model',effort:'low',output:{decision:'continue'}}.",
+    inputSchema: { type: "object", additionalProperties: false, required: ["runId", "receipt"], properties: { runId, receipt: checkpointReceipt } }
+  },
   { name: "flow_audit", description: "Read the deterministic audit for one local run.", inputSchema: { type: "object", additionalProperties: false, required: ["runId"], properties: { runId } } },
+  { name: "flow_review", description: "On explicit maintainer request, review completed local runs for one flow. Returns an advisory evidence report for an independent agent using the flow-performance-review Skill. Never call from an active flow node.", inputSchema: { type: "object", additionalProperties: false, required: ["flowId"], properties: { flowId: identifier, profileId: identifier, last: { type: "integer", minimum: 1, maximum: 100 }, since: { type: "string" }, contentHash: { type: "string", pattern: "^[a-f0-9]{64}$" }, compareVersions: { type: "boolean" } } } },
   { name: "flow_open", description: "Reserved for an optional read-only viewer. This version fails closed.", inputSchema: { type: "object", additionalProperties: false, required: ["runId"], properties: { runId } } }
 ]);
 
@@ -26,12 +54,23 @@ function failure(error) {
 
 export async function callTool(client, name, input = {}) {
   try {
-    if (name === "flow_list") return result(await client.list());
+    if (name === "flow_list") return result(await client.list(input.profileId));
+    if (name === "flow_select") return result(await client.selectFlow(input));
     if (name === "flow_inspect") return result(await client.inspect(input.runId));
+    if (name === "flow_retry_inspect") return result(await client.retryInspect(input.runId, input.nodeId));
+    if (name === "flow_retry_node") return result(await client.retryNode(input.runId, { nodeId: input.nodeId, failedRecordedAt: input.failedRecordedAt, workspace: input.workspace, reviewedNodeIds: input.reviewedNodeIds, worktreeReview: input.worktreeReview, reason: input.reason }));
+    if (name === "flow_block") return result(await client.block(input.runId, { nodeId: input.nodeId, reason: input.reason, reasonCode: input.reasonCode }));
+    if (name === "flow_switch_runtime") return result(await client.switchRuntime(input.runId, { nodeId: input.nodeId, executionProfileId: input.executionProfileId, reason: input.reason, workspace: input.workspace, worktreeReview: input.worktreeReview, reviewedPredecessors: input.reviewedPredecessors }));
+    if (name === "flow_continue") return result(await client.continueRun(input.runId, { reason: input.reason, workspace: input.workspace, worktreeReview: input.worktreeReview, reviewedPredecessors: input.reviewedPredecessors, userApproval: input.userApproval }));
     if (name === "flow_start_guided") return result(await client.startGuided(input));
+    if (name === "flow_report_write") return result(await client.writeReport(input.runId, input.nodeId, input.report));
+    if (name === "flow_report_read") return result(await client.readReport(input.runId, input.nodeId));
     if (name === "flow_checkpoint") return result(await client.checkpoint(input.runId, input.receipt));
     if (name === "flow_audit") return result(await client.audit(input.runId));
-    if (name === "flow_next" || name === "flow_open") throw new FlowError("MCP_OPERATION_UNAVAILABLE", `${name} is not available until the local scheduler or viewer is installed.`);
+    if (name === "flow_review") return result(await client.review(input));
+    if (name === "flow_next") return result(await client.next(input.runId));
+    if (name === "flow_lifecycle") return result(await client.lifecycle(input.runId, input.action));
+    if (name === "flow_open") throw new FlowError("MCP_OPERATION_UNAVAILABLE", `${name} is not available until the viewer is installed.`);
     throw new FlowError("MCP_UNKNOWN_TOOL", `Unknown flow-mcp tool: ${name}`);
   } catch (error) {
     return failure(error);
@@ -51,13 +90,13 @@ export function startStdioServer(client, { input = process.stdin, output = proce
     let request;
     try {
       request = JSON.parse(line);
-      if (!request.id) {
+      if (request.id === undefined) {
         await handleRequest(client, request);
         return;
       }
       output.write(`${JSON.stringify({ jsonrpc: "2.0", id: request.id, result: await handleRequest(client, request) })}\n`);
     } catch (error) {
-      if (request?.id) output.write(`${JSON.stringify({ jsonrpc: "2.0", id: request.id, error: { code: -32603, message: error.message || "Internal MCP error." } })}\n`);
+      if (request?.id !== undefined) output.write(`${JSON.stringify({ jsonrpc: "2.0", id: request.id, error: { code: -32603, message: error.message || "Internal MCP error." } })}\n`);
       else errorOutput.write(`flow-mcp: ${error.message || "Invalid request."}\n`);
     }
   });

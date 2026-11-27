@@ -11,11 +11,22 @@
       "get": { "operationId": "health", "responses": { "200": { "$ref": "#/components/responses/Health" } } }
     },
     "/v1/flows": {
-      "get": { "operationId": "listFlows", "parameters": [{ "$ref": "#/components/parameters/Cursor" }, { "$ref": "#/components/parameters/Limit" }], "responses": { "200": { "$ref": "#/components/responses/FlowPage" } } }
+      "get": { "operationId": "listFlows", "parameters": [{ "$ref": "#/components/parameters/ProfileId" }, { "$ref": "#/components/parameters/Cursor" }, { "$ref": "#/components/parameters/Limit" }], "responses": { "200": { "$ref": "#/components/responses/FlowPage" } } }
+    },
+    "/v1/sources": {
+      "get": { "operationId": "listFlowSources", "responses": { "200": { "description": "Configured non-secret local flow source status" } } }
     },
     "/v1/runs": {
-      "get": { "operationId": "listRuns", "parameters": [{ "$ref": "#/components/parameters/FlowId" }, { "$ref": "#/components/parameters/RunId" }, { "$ref": "#/components/parameters/Cursor" }, { "$ref": "#/components/parameters/Limit" }], "responses": { "200": { "$ref": "#/components/responses/RunPage" } } },
+      "get": { "operationId": "listRuns", "parameters": [{ "$ref": "#/components/parameters/FlowId" }, { "$ref": "#/components/parameters/ProfileId" }, { "$ref": "#/components/parameters/RunId" }, { "$ref": "#/components/parameters/Cursor" }, { "$ref": "#/components/parameters/Limit" }], "responses": { "200": { "$ref": "#/components/responses/RunPage" } } },
       "post": { "operationId": "createRun", "parameters": [{ "$ref": "#/components/parameters/LocalToken" }, { "$ref": "#/components/parameters/IdempotencyKey" }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CreateRunRequest" } } } }, "responses": { "201": { "$ref": "#/components/responses/Run" }, "200": { "$ref": "#/components/responses/Run" }, "400": { "$ref": "#/components/responses/Error" }, "401": { "$ref": "#/components/responses/Error" }, "409": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/v1/flow-selection": {
+      "post": {
+        "operationId": "selectFlow",
+        "parameters": [{ "$ref": "#/components/parameters/LocalToken" }, { "$ref": "#/components/parameters/IdempotencyKey" }],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/FlowSelectionRequest" } } } },
+        "responses": { "200": { "description": "A unique local match or a confirmation request" }, "400": { "$ref": "#/components/responses/Error" }, "401": { "$ref": "#/components/responses/Error" }, "409": { "$ref": "#/components/responses/Error" } }
+      }
     },
     "/v1/runs/{id}": {
       "get": { "operationId": "getRun", "parameters": [{ "$ref": "#/components/parameters/RunPathId" }], "responses": { "200": { "$ref": "#/components/responses/Run" }, "404": { "$ref": "#/components/responses/Error" } } }
@@ -23,12 +34,67 @@
     "/v1/runs/{id}/checkpoint": {
       "post": { "operationId": "checkpointRun", "parameters": [{ "$ref": "#/components/parameters/RunPathId" }, { "$ref": "#/components/parameters/LocalToken" }, { "$ref": "#/components/parameters/IdempotencyKey" }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CheckpointRequest" } } } }, "responses": { "200": { "$ref": "#/components/responses/Run" }, "400": { "$ref": "#/components/responses/Error" }, "401": { "$ref": "#/components/responses/Error" }, "404": { "$ref": "#/components/responses/Error" }, "409": { "$ref": "#/components/responses/Error" } } }
     },
+    "/v1/runs/{id}/reports/{nodeId}": {
+      "get": { "operationId": "readNodeReport", "parameters": [{ "$ref": "#/components/parameters/RunPathId" }, { "name": "nodeId", "in": "path", "required": true, "schema": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,62}$" } }, { "$ref": "#/components/parameters/LocalToken" }], "responses": { "200": { "description": "Checkpointed report and verified digest" }, "401": { "$ref": "#/components/responses/Error" }, "404": { "$ref": "#/components/responses/Error" } } },
+      "post": { "operationId": "writeNodeReport", "parameters": [{ "$ref": "#/components/parameters/RunPathId" }, { "name": "nodeId", "in": "path", "required": true, "schema": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,62}$" } }, { "$ref": "#/components/parameters/LocalToken" }, { "$ref": "#/components/parameters/IdempotencyKey" }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object", "additionalProperties": false, "required": ["report"], "properties": { "report": { "type": "object", "maxProperties": 2048 } } } } } }, "responses": { "200": { "description": "Run-relative report path and SHA-256 digest" }, "400": { "$ref": "#/components/responses/Error" }, "401": { "$ref": "#/components/responses/Error" }, "404": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/v1/runs/{id}/retry": {
+      "get": { "operationId": "inspectNodeRetry", "parameters": [{ "$ref": "#/components/parameters/RunPathId" }, { "$ref": "#/components/parameters/LocalToken" }, { "name": "nodeId", "in": "query", "required": true, "schema": { "type": "string" } }], "responses": { "200": { "description": "Failed receipt, predecessors, workspace, archived attempts, pinned availableExecutionProfiles, and currentSourceExecutionProfiles (current-source candidates, not pinned) for legacy rate-limit recovery" }, "401": { "$ref": "#/components/responses/Error" }, "404": { "$ref": "#/components/responses/Error" } } },
+      "post": { "operationId": "retryFailedNode", "parameters": [{ "$ref": "#/components/parameters/RunPathId" }, { "$ref": "#/components/parameters/LocalToken" }, { "$ref": "#/components/parameters/IdempotencyKey" }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/RetryNodeRequest" } } } }, "responses": { "200": { "description": "Retry attempt is ready" }, "400": { "$ref": "#/components/responses/Error" }, "401": { "$ref": "#/components/responses/Error" }, "404": { "$ref": "#/components/responses/Error" }, "409": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/v1/runs/{id}/block": {
+      "post": { "operationId": "blockRun", "parameters": [{ "$ref": "#/components/parameters/RunPathId" }, { "$ref": "#/components/parameters/LocalToken" }, { "$ref": "#/components/parameters/IdempotencyKey" }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BlockRequest" } } } }, "responses": { "200": { "$ref": "#/components/responses/Run" }, "400": { "$ref": "#/components/responses/Error" }, "401": { "$ref": "#/components/responses/Error" }, "409": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/v1/runs/{id}/switch-runtime": {
+      "post": { "operationId": "switchRunExecutionProfile", "parameters": [{ "$ref": "#/components/parameters/RunPathId" }, { "$ref": "#/components/parameters/LocalToken" }, { "$ref": "#/components/parameters/IdempotencyKey" }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/SwitchRuntimeRequest" } } } }, "responses": { "200": { "description": "Same run with the selected execution profile applied to the blocked node and all remaining nodes. When no ID is supplied, a pinned fallback takes precedence; otherwise EXECUTION_PROFILE_REQUIRED lists available profile IDs and runtimes, or FALLBACK_NOT_CONFIGURED reports no alternatives" }, "400": { "$ref": "#/components/responses/Error" }, "401": { "$ref": "#/components/responses/Error" }, "409": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/v1/runs/{id}/continue": {
+      "post": { "operationId": "continueRun", "parameters": [{ "$ref": "#/components/parameters/RunPathId" }, { "$ref": "#/components/parameters/LocalToken" }, { "$ref": "#/components/parameters/IdempotencyKey" }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ContinueRequest" } } } }, "responses": { "200": { "description": "Same run with pending nodes" }, "400": { "$ref": "#/components/responses/Error" }, "401": { "$ref": "#/components/responses/Error" }, "409": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/v1/runs/{id}/next": {
+      "post": { "operationId": "nextFlowNodes", "parameters": [{ "$ref": "#/components/parameters/RunPathId" }, { "$ref": "#/components/parameters/LocalToken" }, { "$ref": "#/components/parameters/IdempotencyKey" }], "responses": { "200": { "description": "Ready nodes and configured agent execution guidance" }, "400": { "$ref": "#/components/responses/Error" }, "401": { "$ref": "#/components/responses/Error" }, "404": { "$ref": "#/components/responses/Error" } } }
+    },
     "/v1/runs/{id}/lifecycle": {
       "post": { "operationId": "transitionRun", "parameters": [{ "$ref": "#/components/parameters/RunPathId" }, { "$ref": "#/components/parameters/LocalToken" }, { "$ref": "#/components/parameters/IdempotencyKey" }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LifecycleRequest" } } } }, "responses": { "200": { "$ref": "#/components/responses/Run" }, "400": { "$ref": "#/components/responses/Error" }, "401": { "$ref": "#/components/responses/Error" }, "404": { "$ref": "#/components/responses/Error" }, "409": { "$ref": "#/components/responses/Error" } } }
     },
     "/v1/runs/{id}/audit": {
       "get": { "operationId": "getAudit", "parameters": [{ "$ref": "#/components/parameters/RunPathId" }], "responses": { "200": { "$ref": "#/components/responses/Audit" }, "404": { "$ref": "#/components/responses/Error" } } },
       "post": { "operationId": "auditRun", "parameters": [{ "$ref": "#/components/parameters/RunPathId" }, { "$ref": "#/components/parameters/LocalToken" }, { "$ref": "#/components/parameters/IdempotencyKey" }], "responses": { "200": { "$ref": "#/components/responses/Audit" }, "401": { "$ref": "#/components/responses/Error" }, "404": { "$ref": "#/components/responses/Error" } } }
+    },
+    "/v1/reviews": {
+      "post": {
+        "operationId": "reviewFlow",
+        "parameters": [
+          { "$ref": "#/components/parameters/LocalToken" },
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["flowId"],
+                "properties": {
+                  "flowId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$" },
+                  "profileId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$" },
+                  "last": { "type": "integer", "minimum": 1, "maximum": 100 },
+                  "since": { "type": "string", "format": "date-time" },
+                  "contentHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+                  "compareVersions": { "type": "boolean" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Deterministic advisory flow review" },
+          "400": { "$ref": "#/components/responses/Error" },
+          "401": { "$ref": "#/components/responses/Error" },
+          "409": { "$ref": "#/components/responses/Error" }
+        }
+      }
     },
     "/v1/service/shutdown": {
       "post": { "operationId": "shutdown", "parameters": [{ "$ref": "#/components/parameters/LocalToken" }, { "$ref": "#/components/parameters/IdempotencyKey" }], "responses": { "202": { "description": "Shutdown accepted" }, "401": { "$ref": "#/components/responses/Error" } } }
@@ -40,17 +106,23 @@
       "IdempotencyKey": { "name": "Idempotency-Key", "in": "header", "required": true, "schema": { "type": "string", "minLength": 16, "maxLength": 128 }, "description": "The same key and request return the original result; reuse with a different request returns 409." },
       "RunPathId": { "name": "id", "in": "path", "required": true, "schema": { "type": "string", "pattern": "^run_[a-z0-9-]{1,63}$" } },
       "FlowId": { "name": "flowId", "in": "query", "schema": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$" } },
+      "ProfileId": { "name": "profileId", "in": "query", "schema": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$" }, "description": "Private local profile/source identifier." },
       "RunId": { "name": "runId", "in": "query", "schema": { "type": "string", "pattern": "^run_[a-z0-9-]{1,63}$" } },
       "Cursor": { "name": "cursor", "in": "query", "schema": { "type": "string", "minLength": 1, "maxLength": 512 } },
       "Limit": { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 50 } }
     },
     "schemas": {
-      "CreateRunRequest": { "type": "object", "additionalProperties": false, "required": ["flowId", "workspace", "runtime", "executionMode"], "properties": { "flowId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$" }, "workspace": { "type": "string", "minLength": 1, "maxLength": 4096 }, "runtime": { "enum": ["codex", "claude"] }, "executionMode": { "enum": ["guided", "direct"] } } },
+      "CreateRunRequest": { "type": "object", "additionalProperties": false, "required": ["flowId", "workspace", "executionMode"], "properties": { "flowId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$" }, "profileId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$" }, "workspace": { "type": "string", "minLength": 1, "maxLength": 4096 }, "runtime": { "enum": ["codex", "claude"] }, "executionProfileId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$" }, "executionMode": { "enum": ["guided", "direct"] }, "task": { "type": "string", "maxLength": 65536 }, "reuseFromRunId": { "type": "string", "pattern": "^run_[a-z0-9-]{1,63}$" }, "reuseNodeIds": { "type": "array", "minItems": 1, "maxItems": 128, "uniqueItems": true, "items": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,62}$" } } }, "allOf": [{ "if": { "required": ["reuseFromRunId"] }, "then": { "required": ["reuseNodeIds"] } }, { "if": { "required": ["reuseNodeIds"] }, "then": { "required": ["reuseFromRunId"] } }] },
+      "FlowSelectionRequest": { "type": "object", "additionalProperties": false, "required": ["workspace"], "properties": { "profileId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$" }, "flowId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$" }, "workspace": { "type": "string", "minLength": 1, "maxLength": 4096 }, "task": { "type": "string", "maxLength": 65536 } } },
       "CheckpointRequest": { "type": "object", "additionalProperties": false, "required": ["receipt"], "properties": { "receipt": { "$ref": "receipt.schema.json" } } },
+      "RetryNodeRequest": { "type": "object", "additionalProperties": false, "required": ["nodeId", "failedRecordedAt", "workspace", "reviewedNodeIds", "worktreeReview", "reason"], "properties": { "nodeId": { "type": "string" }, "failedRecordedAt": { "type": "string", "format": "date-time" }, "workspace": { "type": "string" }, "reviewedNodeIds": { "type": "array", "items": { "type": "string" } }, "worktreeReview": { "type": "string" }, "reason": { "type": "string" } } },
+      "BlockRequest": { "type": "object", "additionalProperties": false, "required": ["nodeId", "reason"], "properties": { "nodeId": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,62}$" }, "reason": { "type": "string", "minLength": 1, "maxLength": 2000 }, "reasonCode": { "const": "RATE_LIMIT" } } },
+      "SwitchRuntimeRequest": { "type": "object", "additionalProperties": false, "required": ["nodeId", "reason", "workspace", "worktreeReview", "reviewedPredecessors"], "properties": { "nodeId": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,62}$" }, "executionProfileId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$" }, "reason": { "type": "string", "minLength": 1, "maxLength": 2000 }, "workspace": { "type": "string", "minLength": 1, "maxLength": 4096 }, "worktreeReview": { "type": "string", "minLength": 1, "maxLength": 2000 }, "reviewedPredecessors": { "const": true } } },
+      "ContinueRequest": { "type": "object", "additionalProperties": false, "required": ["reason"], "properties": { "reason": { "type": "string", "minLength": 1, "maxLength": 2000 }, "workspace": { "type": "string", "minLength": 1, "maxLength": 4096 }, "worktreeReview": { "type": "string", "minLength": 1, "maxLength": 2000 }, "reviewedPredecessors": { "const": true } } },
       "LifecycleRequest": { "type": "object", "additionalProperties": false, "required": ["action"], "properties": { "action": { "enum": ["start", "pause", "resume", "stop", "complete", "fail"] } } },
-      "Flow": { "type": "object", "additionalProperties": false, "required": ["id", "title"], "properties": { "id": { "type": "string" }, "title": { "type": "string" } } },
+      "Flow": { "type": "object", "additionalProperties": false, "required": ["id", "title", "sourceId", "profileId", "contentHash"], "properties": { "id": { "type": "string" }, "title": { "type": "string" }, "sourceId": { "type": "string" }, "profileId": { "type": "string" }, "contentHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }, "description": { "type": "string" }, "gitCommit": { "type": "string" } } },
       "Run": { "$ref": "run.schema.json" },
-      "Audit": { "type": "object", "additionalProperties": false, "required": ["schemaVersion", "runId", "result", "findings"], "properties": { "schemaVersion": { "const": "v1" }, "runId": { "type": "string" }, "result": { "enum": ["passed", "failed"] }, "findings": { "type": "array" } } },
+      "Audit": { "type": "object", "additionalProperties": false, "required": ["schemaVersion", "runId", "result", "findings"], "properties": { "schemaVersion": { "const": "v1" }, "runId": { "type": "string" }, "result": { "enum": ["passed", "failed", "incomplete"] }, "findings": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["code"], "properties": { "code": { "enum": ["NODE_FAILED", "FLOW_DEFINITION_MISSING", "NODE_EVIDENCE_MISSING", "RUN_FAILED", "RUN_STOPPED", "RUN_BLOCKED", "RUN_INCOMPLETE", "REPORT_MISSING", "REPORT_HASH_MISMATCH", "REPORT_INVALID"] }, "nodeId": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,62}$" }, "reportPath": { "type": "string" }, "reason": { "type": "string" } } } }, "warnings": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["nodeId", "code", "reason"], "properties": { "nodeId": { "type": "string" }, "code": { "type": "string" }, "reason": { "type": "string" } } } }, "reusedReceipts": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["nodeId", "runId", "contextHash"], "properties": { "nodeId": { "type": "string" }, "runId": { "type": "string" }, "contextHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" } } } }, "blockHistory": { "type": "array", "items": { "type": "object" } }, "executionHistory": { "type": "array", "items": { "type": "object" } }, "retryHistory": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["nodeId", "attempt", "status", "recordedAt"], "properties": { "nodeId": { "type": "string" }, "attempt": { "type": "integer" }, "status": { "enum": ["failed", "completed"] }, "stopRuleBlocked": { "type": "boolean" }, "recordedAt": { "type": "string", "format": "date-time" }, "serverTiming": { "type": "object", "additionalProperties": false, "properties": { "dispatchedAt": { "type": ["string", "null"], "format": "date-time" }, "checkpointedAt": { "type": "string", "format": "date-time" }, "durationMs": { "type": ["integer", "null"], "minimum": 0 } } }, "reason": { "type": "string" }, "reviewedNodeIds": { "type": "array", "items": { "type": "string" } } } } } } },
       "Error": { "$ref": "http-error.schema.json" }
     },
     "responses": {

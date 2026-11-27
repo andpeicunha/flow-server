@@ -3,10 +3,36 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { resolveStateDir } from "../core/state-dir.js";
 
-const commands = new Set(["list", "start", "inspect", "checkpoint", "audit"]);
+const commands = new Set(["help", "list", "flows", "select", "start", "next", "lifecycle", "inspect", "retry-inspect", "block", "switch-runtime", "continue", "checkpoint", "audit", "review"]);
 
 function usage() {
-  return "Usage: flow <list|start|inspect|checkpoint|audit> [options]";
+  return "Usage: flow <help|flows|list|select|start|next|lifecycle|inspect|retry-inspect|block|switch-runtime|continue|checkpoint|audit|review> [options]";
+}
+
+function help() {
+  return `Flow CLI commands:
+  flow inspect <run-id>
+  flow retry-inspect <run-id> <node-id>
+  flow next <run-id>
+  flow block <run-id> <node-id> --reason "..." [--rate-limit]
+  flow switch-runtime <run-id> <node-id> --execution-profile <id> --reason "..." --workspace <path> --worktree-review "..." --reviewed-predecessors
+  flow continue <run-id> --reason "..." [--workspace <path> --worktree-review "..." --reviewed-predecessors] [--user-approval "<user text, only after retry limit>"]
+  flow start --flow <id> --workspace <path> --mode guided [--reuse-from <run-id> --reuse-nodes <id,id,...>]
+
+Rate-limit recovery:
+  1. If not already blocked, record a real provider limit with flow block --rate-limit.
+  2. Confirm status, RATE_LIMIT reason, and pending node with flow inspect.
+  3. Run flow retry-inspect for that node. Check availableExecutionProfiles and currentSourceExecutionProfiles (current source, not pinned),
+     selectedExecution, every predecessor receipt, otherFailures, retryPending,
+     and the actual pinned worktree for partial changes.
+  4. When another execution profile is available, select it with
+     --execution-profile. The switch applies to this and all remaining nodes.
+     Otherwise use a configured fallbackExecution when available.
+  5. If neither option exists, do not switch or start a replacement run.
+     Continue the same run only after primary provider access is restored.
+
+These commands use the local flow service. Mutations follow the same service
+checks as MCP operations.`;
 }
 
 function parse(argumentsList) {
@@ -18,7 +44,7 @@ function parse(argumentsList) {
       positional.push(item);
       continue;
     }
-    if (item === "--approve-host-adapter") {
+    if (["--approve-host-adapter", "--compare-versions", "--rate-limit", "--reviewed-predecessors"].includes(item)) {
       values[item] = true;
       continue;
     }
@@ -28,7 +54,7 @@ function parse(argumentsList) {
     values[item] = value;
     index += 1;
   }
-  const allowed = new Set(["--state-dir", "--flow", "--workspace", "--runtime", "--mode", "--receipt", "--approve-host-adapter"]);
+  const allowed = new Set(["--state-dir", "--flow", "--profile", "--execution-profile", "--task", "--workspace", "--runtime", "--mode", "--receipt", "--approve-host-adapter", "--last", "--since", "--content-hash", "--compare-versions", "--node", "--reason", "--worktree-review", "--rate-limit", "--reviewed-predecessors", "--user-approval", "--reuse-from", "--reuse-nodes"]);
   const unexpected = Object.keys(values).find((key) => !allowed.has(key));
   if (unexpected) throw new Error(`Unsupported option: ${unexpected}`);
   return { positional, values };
@@ -47,8 +73,9 @@ async function service(stateDir) {
   };
 }
 
-async function request(client, path, { method = "GET", body, mutate = false } = {}) {
+async function request(client, path, { method = "GET", body, mutate = false, privateRead = false } = {}) {
   const headers = {};
+  if (mutate || privateRead) headers["x-flow-local-token"] = client.token;
   if (mutate) {
     headers["x-flow-local-token"] = client.token;
     headers["idempotency-key"] = `flow-${Date.now()}-${process.pid}-${Math.random().toString(36).slice(2)}`;
@@ -73,6 +100,7 @@ function requireOption(values, name) {
 async function main() {
   const [command, ...argumentsList] = process.argv.slice(2);
   if (!commands.has(command)) throw new Error(usage());
+  if (command === "help") return console.log(help());
   const { positional, values } = parse(argumentsList);
   const stateDir = values["--state-dir"] || resolveStateDir({ homeDir: homedir() });
   const client = await service(stateDir);
@@ -81,19 +109,101 @@ async function main() {
     const parameter = values["--flow"] ? `?flowId=${encodeURIComponent(values["--flow"])}` : "";
     return console.log(JSON.stringify(await request(client, `/v1/runs${parameter}`)));
   }
+  if (command === "flows") {
+    const parameter = values["--profile"] ? `?profileId=${encodeURIComponent(values["--profile"])}` : "";
+    return console.log(JSON.stringify(await request(client, `/v1/flows${parameter}`)));
+  }
   if (command === "inspect") {
     return console.log(JSON.stringify(await request(client, `/v1/runs/${requireOption({ id: positional[0] }, "id")}`)));
+  }
+  if (command === "retry-inspect") {
+    const runId = requireOption({ runId: positional[0] }, "runId");
+    const nodeId = requireOption({ nodeId: positional[1] ?? values["--node"] }, "nodeId");
+    return console.log(JSON.stringify(await request(client, `/v1/runs/${encodeURIComponent(runId)}/retry?nodeId=${encodeURIComponent(nodeId)}`, { privateRead: true })));
+  }
+  if (command === "block") {
+    const runId = requireOption({ runId: positional[0] }, "runId");
+    const nodeId = requireOption({ nodeId: positional[1] ?? values["--node"] }, "nodeId");
+    const body = { nodeId, reason: requireOption(values, "--reason"), ...(values["--rate-limit"] ? { reasonCode: "RATE_LIMIT" } : {}) };
+    return console.log(JSON.stringify(await request(client, `/v1/runs/${encodeURIComponent(runId)}/block`, { method: "POST", body, mutate: true })));
+  }
+  if (command === "switch-runtime") {
+    const runId = requireOption({ runId: positional[0] }, "runId");
+    const nodeId = requireOption({ nodeId: positional[1] ?? values["--node"] }, "nodeId");
+    const body = {
+      nodeId,
+      ...(values["--execution-profile"] ? { executionProfileId: values["--execution-profile"] } : {}),
+      reason: requireOption(values, "--reason"),
+      workspace: requireOption(values, "--workspace"),
+      worktreeReview: requireOption(values, "--worktree-review"),
+      reviewedPredecessors: Boolean(values["--reviewed-predecessors"])
+    };
+    return console.log(JSON.stringify(await request(client, `/v1/runs/${encodeURIComponent(runId)}/switch-runtime`, { method: "POST", body, mutate: true })));
+  }
+  if (command === "continue") {
+    const runId = requireOption({ runId: positional[0] }, "runId");
+    const body = {
+      reason: requireOption(values, "--reason"),
+      ...(values["--workspace"] ? { workspace: values["--workspace"] } : {}),
+      ...(values["--worktree-review"] ? { worktreeReview: values["--worktree-review"] } : {}),
+      ...(values["--reviewed-predecessors"] ? { reviewedPredecessors: true } : {}),
+      ...(values["--user-approval"] !== undefined ? { userApproval: values["--user-approval"] } : {})
+    };
+    return console.log(JSON.stringify(await request(client, `/v1/runs/${encodeURIComponent(runId)}/continue`, { method: "POST", body, mutate: true })));
+  }
+  if (command === "next") {
+    return console.log(JSON.stringify(await request(client, `/v1/runs/${requireOption({ id: positional[0] }, "id")}/next`, { method: "POST", body: {}, mutate: true })));
+  }
+  if (command === "lifecycle") {
+    const runId = requireOption({ runId: positional[0] }, "runId");
+    const action = requireOption({ action: positional[1] }, "action");
+    if (!["pause", "resume", "stop", "fail"].includes(action)) throw new Error("action must be pause, resume, stop, or fail.");
+    return console.log(JSON.stringify(await request(client, `/v1/runs/${encodeURIComponent(runId)}/lifecycle`, { method: "POST", body: { action }, mutate: true })));
   }
   if (command === "audit") {
     return console.log(JSON.stringify(await request(client, `/v1/runs/${requireOption({ id: positional[0] }, "id")}/audit`)));
   }
+  if (command === "review") {
+    const last = values["--last"] === undefined ? 20 : Number(values["--last"]);
+    if (!Number.isInteger(last)) throw new Error("--last must be an integer.");
+    const body = {
+      flowId: requireOption({ flowId: positional[0] ?? values["--flow"] }, "flowId"),
+      ...(values["--profile"] ? { profileId: values["--profile"] } : {}),
+      last,
+      ...(values["--since"] ? { since: values["--since"] } : {}),
+      ...(values["--content-hash"] ? { contentHash: values["--content-hash"] } : {}),
+      ...(values["--compare-versions"] ? { compareVersions: true } : {})
+    };
+    return console.log(JSON.stringify(await request(client, "/v1/reviews", { method: "POST", body, mutate: true })));
+  }
+  if (command === "select") {
+    const body = {
+      workspace: requireOption(values, "--workspace"),
+      ...(values["--profile"] ? { profileId: values["--profile"] } : {}),
+      ...(values["--flow"] ? { flowId: values["--flow"] } : {}),
+      ...(values["--task"] ? { task: values["--task"] } : {})
+    };
+    return console.log(JSON.stringify(await request(client, "/v1/flow-selection", { method: "POST", body, mutate: true })));
+  }
   if (command === "start") {
-    const runtime = requireOption(values, "--runtime");
+    const runtime = values["--runtime"];
     const mode = requireOption(values, "--mode");
     if (mode === "direct" && !values["--approve-host-adapter"]) {
       throw new Error("Direct mode requires --approve-host-adapter. No adapter is launched by this development build.");
     }
-    const body = { flowId: requireOption(values, "--flow"), workspace: requireOption(values, "--workspace"), runtime, executionMode: mode };
+    const workspace = requireOption(values, "--workspace");
+    const selection = await request(client, "/v1/flow-selection", { method: "POST", body: {
+      workspace,
+      ...(values["--profile"] ? { profileId: values["--profile"] } : {}),
+      ...(values["--flow"] ? { flowId: values["--flow"] } : {}),
+      ...(values["--task"] ? { task: values["--task"] } : {})
+    }, mutate: true });
+    if (selection.decision !== "ready") {
+      console.log(JSON.stringify(selection));
+      process.exitCode = 2;
+      return;
+    }
+    const body = { flowId: selection.flowId, profileId: selection.profileId, workspace, ...(runtime ? { runtime } : {}), ...(values["--execution-profile"] ? { executionProfileId: values["--execution-profile"] } : {}), executionMode: mode, ...(values["--task"] ? { task: values["--task"] } : {}), ...(values["--reuse-from"] ? { reuseFromRunId: values["--reuse-from"] } : {}), ...(values["--reuse-nodes"] ? { reuseNodeIds: values["--reuse-nodes"].split(",") } : {}) };
     return console.log(JSON.stringify(await request(client, "/v1/runs", { method: "POST", body, mutate: true })));
   }
   const receiptPath = requireOption(values, "--receipt");

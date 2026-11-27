@@ -32,11 +32,11 @@ export class LocalFlowClient {
     };
   }
 
-  async request(path, { method = "GET", body, mutate = false } = {}) {
+  async request(path, { method = "GET", body, mutate = false, privateRead = false } = {}) {
     const connection = await this.connection();
     const headers = body === undefined ? {} : { "content-type": "application/json" };
+    if (mutate || privateRead) headers["x-flow-local-token"] = connection.token;
     if (mutate) {
-      headers["x-flow-local-token"] = connection.token;
       headers["idempotency-key"] = this.idempotencyKey();
     }
     let response;
@@ -50,11 +50,27 @@ export class LocalFlowClient {
     return result;
   }
 
-  list() { return this.request("/v1/flows"); }
+  list(profileId) { return this.request(`/v1/flows${profileId ? `?profileId=${encodeURIComponent(profileId)}` : ""}`); }
+  selectFlow(selection) { return this.request("/v1/flow-selection", { method: "POST", mutate: true, body: selection }); }
   inspect(runId) { return this.request(`/v1/runs/${encodeURIComponent(runId)}`); }
+  retryInspect(runId, nodeId) { return this.request(`/v1/runs/${encodeURIComponent(runId)}/retry?nodeId=${encodeURIComponent(nodeId)}`, { privateRead: true }); }
+  retryNode(runId, review) { return this.request(`/v1/runs/${encodeURIComponent(runId)}/retry`, { method: "POST", mutate: true, body: review }); }
+  block(runId, details) { return this.request(`/v1/runs/${encodeURIComponent(runId)}/block`, { method: "POST", mutate: true, body: details }); }
+  continueRun(runId, resolution) { return this.request(`/v1/runs/${encodeURIComponent(runId)}/continue`, { method: "POST", mutate: true, body: resolution }); }
+  switchRuntime(runId, review) { return this.request(`/v1/runs/${encodeURIComponent(runId)}/switch-runtime`, { method: "POST", mutate: true, body: review }); }
   audit(runId) { return this.request(`/v1/runs/${encodeURIComponent(runId)}/audit`); }
-  startGuided({ flowId, workspace, runtime }) {
-    return this.request("/v1/runs", { method: "POST", mutate: true, body: { flowId, workspace, runtime, executionMode: "guided" } });
+  review({ flowId, profileId, last = 20, since, contentHash, compareVersions = false }) {
+    return this.request("/v1/reviews", { method: "POST", mutate: true, body: {
+      flowId, ...(profileId ? { profileId } : {}), last,
+      ...(since ? { since } : {}), ...(contentHash ? { contentHash } : {}), compareVersions
+    } });
+  }
+  next(runId) { return this.request(`/v1/runs/${encodeURIComponent(runId)}/next`, { method: "POST", mutate: true, body: {} }); }
+  writeReport(runId, nodeId, report) { return this.request(`/v1/runs/${encodeURIComponent(runId)}/reports/${encodeURIComponent(nodeId)}`, { method: "POST", mutate: true, body: { report } }); }
+  readReport(runId, nodeId) { return this.request(`/v1/runs/${encodeURIComponent(runId)}/reports/${encodeURIComponent(nodeId)}`, { privateRead: true }); }
+  lifecycle(runId, action) { return this.request(`/v1/runs/${encodeURIComponent(runId)}/lifecycle`, { method: "POST", mutate: true, body: { action } }); }
+  startGuided({ flowId, profileId, workspace, runtime, executionProfileId, task, reuseFromRunId, reuseNodeIds }) {
+    return this.request("/v1/runs", { method: "POST", mutate: true, body: { flowId, ...(profileId ? { profileId } : {}), workspace, ...(runtime ? { runtime } : {}), ...(executionProfileId ? { executionProfileId } : {}), executionMode: "guided", ...(task !== undefined ? { task } : {}), ...(reuseFromRunId ? { reuseFromRunId } : {}), ...(reuseNodeIds ? { reuseNodeIds } : {}) } });
   }
   checkpoint(runId, receipt) {
     return this.request(`/v1/runs/${encodeURIComponent(runId)}/checkpoint`, { method: "POST", mutate: true, body: { receipt } });

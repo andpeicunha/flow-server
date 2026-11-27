@@ -1,0 +1,22 @@
+id = "andpeicunha.flow-server"
+name = "flow-server"
+version = "0.1.3"
+min_herdr_version = "0.7.5"
+platforms = ["macos", "linux"]
+description = "Local guided flows, validation, audit, and on-demand MCP review."
+
+[[build]]
+platforms = ["macos", "linux"]
+command = ["bash", "herdr/build.sh"]
+
+[[panes]]
+id = "flows"
+title = "Flow Server"
+placement = "tab"
+command = ["sh", "-c", "exec node \"$HERDR_PLUGIN_ROOT/herdr/pane.mjs\""]
+
+[[actions]]
+id = "open"
+title = "flow: open server"
+contexts = ["pane", "workspace"]
+command = ["bash", "herdr/open.sh"]

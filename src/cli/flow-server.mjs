@@ -4,15 +4,18 @@ import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { resolveStateDir } from "../core/state-dir.js";
+import { loadFlowSourceConfig, resolveFlowSourceConfigPath } from "../core/flow-source-config.js";
+import { diagnoseFlowSetup } from "../service/doctor-service.js";
 import { ServiceHost } from "../service/service-host.js";
+import { checkBeforeStart } from "../service/startup-check.js";
 
 const commands = new Set(["start", "status", "stop", "doctor", "serve"]);
 
 function usage() {
-  return "Usage: flow-server <start|status|stop|doctor> [--state-dir DIR] [--port PORT]";
+  return "Usage: flow-server <start|status|stop|doctor> [--state-dir DIR] [--source-config FILE] [--port PORT] [--profile ID] [--flow ID]";
 }
 
-function options(argumentsList) {
+function options(command, argumentsList) {
   const values = {};
   for (let index = 0; index < argumentsList.length; index += 1) {
     const key = argumentsList[index];
@@ -21,11 +24,13 @@ function options(argumentsList) {
     if (!values[key] || values[key].startsWith("--")) throw new Error(`Missing value for ${key}`);
     index += 1;
   }
-  const unexpected = Object.keys(values).find((key) => !["--state-dir", "--port"].includes(key));
+  const unexpected = Object.keys(values).find((key) => !["--state-dir", "--source-config", "--port", "--profile", "--flow"].includes(key));
   if (unexpected) throw new Error(`Unsupported option: ${unexpected}`);
   const port = values["--port"] === undefined ? 4729 : Number(values["--port"]);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("--port must be an integer from 1 to 65535.");
-  return { stateDir: values["--state-dir"] || resolveStateDir({ homeDir: homedir() }), port };
+  if ((values["--profile"] || values["--flow"]) && command !== "doctor") throw new Error("--profile and --flow are supported only by doctor.");
+  return { stateDir: values["--state-dir"] || resolveStateDir({ homeDir: homedir() }), sourceConfig: resolveFlowSourceConfigPath({ explicit: values["--source-config"] }), port,
+    profileId: values["--profile"], flowId: values["--flow"] };
 }
 
 async function metadata(stateDir) {
@@ -47,25 +52,36 @@ async function serve(configuration) {
 }
 
 async function start(configuration) {
-  try {
-    console.log(JSON.stringify(await health(`http://127.0.0.1:${configuration.port}`)));
-    return;
-  } catch { /* Start a new local service. */ }
-  const child = spawn(process.execPath, [fileURLToPath(import.meta.url), "serve", "--state-dir", configuration.stateDir, "--port", String(configuration.port)], { detached: true, stdio: "ignore" });
+  const check = await checkBeforeStart(configuration);
+  if (check.action === "ready") { console.log(JSON.stringify(check.running)); return; }
+  const source = await loadFlowSourceConfig(configuration.sourceConfig).catch((error) => {
+    if (error.code === "FLOW_SOURCE_CONFIG_NOT_FOUND") throw new Error(`Flow source config is missing: ${configuration.sourceConfig}. Configure a source in the Herdr plugin or pass --source-config.`);
+    throw error;
+  });
+  if (!source.sources.length) throw new Error(`No flow profiles are configured in ${configuration.sourceConfig}.`);
+  const childArguments = [fileURLToPath(import.meta.url), "serve", "--state-dir", configuration.stateDir, "--port", String(configuration.port)];
+  childArguments.push("--source-config", configuration.sourceConfig);
+  const child = spawn(process.execPath, childArguments, { detached: true, stdio: "ignore" });
   child.unref();
-  for (let attempt = 0; attempt < 20; attempt += 1) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
     await new Promise((resolve) => setTimeout(resolve, 100));
     try {
       console.log(JSON.stringify(await health(`http://127.0.0.1:${configuration.port}`)));
       return;
     } catch { /* Wait for the child. */ }
   }
-  throw new Error("flow-service did not become healthy within 2 seconds.");
+  throw new Error("flow-service did not become healthy within 10 seconds. Check flow-server doctor and the service lock; do not remove a lock owned by an active process.");
 }
 
 async function status(configuration) {
   const info = await metadata(configuration.stateDir);
-  const result = await health(info.endpoint);
+  let result;
+  try { result = await health(info.endpoint); }
+  catch (error) {
+    const code = error?.cause?.code;
+    if (["EPERM", "EACCES"].includes(code)) throw new Error("Cannot access the local flow-service from this session (loopback blocked). The service may still be running.");
+    throw new Error(`Cannot reach the recorded flow-service: ${error.message}. Check its process and port before starting another service.`);
+  }
   console.log(JSON.stringify(result));
   return result;
 }
@@ -79,15 +95,17 @@ async function stop(configuration) {
 }
 
 async function doctor(configuration) {
-  let service = "stopped";
-  try { service = (await status(configuration)).status; } catch { /* Report state below. */ }
-  console.log(JSON.stringify({ node: process.version, stateDir: configuration.stateDir, expectedBind: "127.0.0.1", service }));
+  const result = await diagnoseFlowSetup({ stateDir: configuration.stateDir,
+    sourceConfig: configuration.sourceConfig,
+    profileId: configuration.profileId, flowId: configuration.flowId });
+  console.log(JSON.stringify(result));
+  if (result.status === "not_ready") process.exitCode = 1;
 }
 
 async function main() {
   const [command, ...argumentsList] = process.argv.slice(2);
   if (!commands.has(command)) throw new Error(usage());
-  const configuration = options(argumentsList);
+  const configuration = options(command, argumentsList);
   if (command === "serve") return serve(configuration);
   if (command === "start") return start(configuration);
   if (command === "status") return status(configuration);

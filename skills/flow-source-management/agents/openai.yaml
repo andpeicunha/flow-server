@@ -1,0 +1,4 @@
+interface:
+  display_name: "Flow Source Management"
+  short_description: "Validate and safely sync local flow sources"
+  default_prompt: "Validate and safely synchronize the configured local flow source."

@@ -1,10 +1,23 @@
 # Synthetic example: no runtime command is executed by this fixture.
-schemaVersion: v1
+schemaVersion: v2
 id: hello-flow
 title: Hello flow
 nodes:
   - id: prepare
     title: Prepare a fictional workspace
+    agent: explorer
+    model: provider/model-name
+    effort: low
+    executor: host-agent
+    skills: []
+    prompt: "Inspect only the synthetic workspace for: {{task}}"
+    output: "Return a short JSON summary."
   - id: verify
     title: Verify the synthetic result
     dependsOn: [prepare]
+    agent: test-auditor
+    model: provider/model-name
+    effort: low
+    executor: host-agent
+    prompt: "Review the prepared result: {{step.prepare}}"
+    output: "Return pass or fail with a reason."

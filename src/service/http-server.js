@@ -13,12 +13,12 @@ function send(response, status, body) {
   response.end(body === undefined ? undefined : `${JSON.stringify(body)}\n`);
 }
 
-async function readJson(request) {
+async function readJson(request, maxBytes = 64 * 1024) {
   const chunks = [];
   let size = 0;
   for await (const chunk of request) {
     size += chunk.length;
-    if (size > maxBodyBytes) throw new FlowError("REQUEST_TOO_LARGE", "Request body exceeds 64 KiB.");
+    if (size > maxBytes) throw new FlowError("REQUEST_TOO_LARGE", `Request body exceeds ${Math.floor(maxBytes / 1024)} KiB.`);
     chunks.push(chunk);
   }
   if (!size) return {};
@@ -30,8 +30,28 @@ async function readJson(request) {
 }
 
 function validateCreate(body) {
-  const valid = typeof body.flowId === "string" && typeof body.workspace === "string" && ["codex", "claude"].includes(body.runtime) && ["guided", "direct"].includes(body.executionMode);
-  if (!valid) throw new FlowError("INVALID_RUN_REQUEST", "flowId, workspace, runtime, and executionMode are required.");
+  const valid = body && typeof body === "object" && !Array.isArray(body)
+    && Object.keys(body).every((key) => ["flowId", "profileId", "workspace", "runtime", "executionProfileId", "executionMode", "task", "reuseFromRunId", "reuseNodeIds"].includes(key))
+    && typeof body.flowId === "string" && /^[a-z][a-z0-9-]{0,62}$/.test(body.flowId)
+    && (body.profileId === undefined || (typeof body.profileId === "string" && /^[a-z][a-z0-9-]{0,62}$/.test(body.profileId)))
+    && typeof body.workspace === "string" && body.workspace.length > 0 && body.workspace.length <= 4096
+    && (body.runtime === undefined || ["codex", "claude"].includes(body.runtime)) && ["guided", "direct"].includes(body.executionMode)
+    && (body.executionProfileId === undefined || (typeof body.executionProfileId === "string" && /^[a-z][a-z0-9-]{0,62}$/.test(body.executionProfileId)))
+    && (body.task === undefined || (typeof body.task === "string" && body.task.length <= 64 * 1024))
+    && (body.reuseFromRunId === undefined || (typeof body.reuseFromRunId === "string" && /^run_[a-z0-9-]{1,63}$/.test(body.reuseFromRunId)))
+    && (body.reuseNodeIds === undefined || (Array.isArray(body.reuseNodeIds) && body.reuseNodeIds.length >= 1 && body.reuseNodeIds.length <= 128 && new Set(body.reuseNodeIds).size === body.reuseNodeIds.length && body.reuseNodeIds.every((id) => typeof id === "string" && /^[a-z][a-z0-9_-]{0,62}$/.test(id))))
+    && ((body.reuseFromRunId === undefined) === (body.reuseNodeIds === undefined));
+  if (!valid) throw new FlowError("INVALID_RUN_REQUEST", "flowId, workspace, and executionMode are required; runtime must be configured or supplied.");
+}
+
+function validateFlowSelection(body) {
+  const valid = body && typeof body === "object" && !Array.isArray(body)
+    && Object.keys(body).every((key) => ["profileId", "flowId", "workspace", "task"].includes(key))
+    && typeof body.workspace === "string" && body.workspace.length > 0 && body.workspace.length <= 4096
+    && (body.profileId === undefined || (typeof body.profileId === "string" && /^[a-z][a-z0-9-]{0,62}$/.test(body.profileId)))
+    && (body.flowId === undefined || (typeof body.flowId === "string" && /^[a-z][a-z0-9-]{0,62}$/.test(body.flowId)))
+    && (body.task === undefined || (typeof body.task === "string" && body.task.length <= 64 * 1024));
+  if (!valid) throw new FlowError("INVALID_FLOW_SELECTION", "workspace and optional profileId, flowId, or task must be valid.");
 }
 
 function page(items, url) {
@@ -53,24 +73,42 @@ function page(items, url) {
   return { items: slice, nextCursor: nextOffset < items.length ? Buffer.from(JSON.stringify({ offset: nextOffset })).toString("base64url") : null };
 }
 
-export function createHttpServer({ runService, token, serviceInfo, onShutdown = async () => {}, idempotencyStore = runService.stateStore }) {
+export function createHttpServer({ runService, runReviewService, flowSourceService, token, serviceInfo, onShutdown = async () => {}, idempotencyStore = runService.stateStore }) {
   const idempotency = new Map();
+  const inFlightIdempotency = new Map();
 
   async function mutation(request, body, handler) {
     if (!(await token.matches(request.headers["x-flow-local-token"]))) throw new FlowError("UNAUTHORIZED", "A valid local service token is required.");
     const key = request.headers["idempotency-key"];
     if (typeof key !== "string" || key.length < 16 || key.length > 128) throw new FlowError("INVALID_IDEMPOTENCY_KEY", "A 16-128 character Idempotency-Key is required.");
     const fingerprint = `${request.method}:${request.url}:${JSON.stringify(body)}`;
-    const existing = idempotency.get(key) ?? await idempotencyStore.readIdempotency(key);
+    let existing = idempotency.get(key);
+    if (!existing) {
+      const persisted = await idempotencyStore.readIdempotency(key);
+      existing = idempotency.get(key) ?? persisted;
+    }
     if (existing) {
       if (existing.fingerprint !== fingerprint) throw new FlowError("IDEMPOTENCY_CONFLICT", "Idempotency-Key was already used for another request.");
       return { status: 200, body: existing.body };
     }
-    const result = await handler();
-    const entry = { fingerprint, body: result.body };
-    await idempotencyStore.writeIdempotency(key, entry);
-    idempotency.set(key, entry);
-    return result;
+    const inFlight = inFlightIdempotency.get(key);
+    if (inFlight) {
+      if (inFlight.fingerprint !== fingerprint) throw new FlowError("IDEMPOTENCY_CONFLICT", "Idempotency-Key is already in use for another request.");
+      return inFlight.promise;
+    }
+    const promise = (async () => {
+      const result = await handler();
+      const entry = { fingerprint, body: result.body };
+      await idempotencyStore.writeIdempotency(key, entry);
+      idempotency.set(key, entry);
+      return result;
+    })();
+    inFlightIdempotency.set(key, { fingerprint, promise });
+    try {
+      return await promise;
+    } finally {
+      if (inFlightIdempotency.get(key)?.promise === promise) inFlightIdempotency.delete(key);
+    }
   }
 
   return createServer(async (request, response) => {
@@ -78,14 +116,24 @@ export function createHttpServer({ runService, token, serviceInfo, onShutdown = 
       const url = new URL(request.url, "http://127.0.0.1");
       if (mutableMethods.has(request.method) && request.headers.origin) throw new FlowError("ORIGIN_NOT_ALLOWED", "Browser-originated mutations are not allowed.");
       if (request.method === "GET" && url.pathname === "/v1/health") return send(response, 200, serviceInfo());
-      if (request.method === "GET" && url.pathname === "/v1/flows") return send(response, 200, page([], url));
-      if (request.method === "GET" && url.pathname === "/v1/runs") return send(response, 200, page(await runService.list({ flowId: url.searchParams.get("flowId") || undefined, runId: url.searchParams.get("runId") || undefined }), url));
+      if (request.method === "GET" && url.pathname === "/v1/flows") return send(response, 200, page(flowSourceService ? await flowSourceService.list({ profileId: url.searchParams.get("profileId") || undefined }) : [], url));
+      if (request.method === "GET" && url.pathname === "/v1/sources") return send(response, 200, { items: flowSourceService ? await flowSourceService.status() : [] });
+      if (request.method === "GET" && url.pathname === "/v1/runs") return send(response, 200, page(await runService.list({ flowId: url.searchParams.get("flowId") || undefined, profileId: url.searchParams.get("profileId") || undefined, runId: url.searchParams.get("runId") || undefined }), url));
 
-      const runMatch = url.pathname.match(/^\/v1\/runs\/(run_[a-z0-9-]{1,63})(?:\/(checkpoint|lifecycle|audit))?$/);
+      const runMatch = url.pathname.match(/^\/v1\/runs\/(run_[a-z0-9-]{1,63})(?:\/(checkpoint|lifecycle|audit|next|retry|block|continue|switch-runtime))?$/);
+      const reportMatch = url.pathname.match(/^\/v1\/runs\/(run_[a-z0-9-]{1,63})\/reports\/([a-z][a-z0-9_-]{0,62})$/);
       if (request.method === "GET" && runMatch?.[2] === undefined) return send(response, 200, await runService.get(runMatch[1]));
       if (request.method === "GET" && runMatch?.[2] === "audit") return send(response, 200, await runService.audit(runMatch[1]));
+      if (request.method === "GET" && reportMatch) {
+        if (!(await token.matches(request.headers["x-flow-local-token"]))) throw new FlowError("UNAUTHORIZED", "A valid local service token is required.");
+        return send(response, 200, await runService.readReport(reportMatch[1], reportMatch[2]));
+      }
+      if (request.method === "GET" && runMatch?.[2] === "retry") {
+        if (!(await token.matches(request.headers["x-flow-local-token"]))) throw new FlowError("UNAUTHORIZED", "A valid local service token is required.");
+        return send(response, 200, await runService.retryContext(runMatch[1], url.searchParams.get("nodeId")));
+      }
 
-      const body = request.method === "POST" ? await readJson(request) : undefined;
+      const body = request.method === "POST" ? await readJson(request, reportMatch ? 1024 * 1024 + 16 * 1024 : maxBodyBytes) : undefined;
       if (request.method === "POST" && url.pathname === "/v1/runs") {
         const result = await mutation(request, body, async () => {
           validateCreate(body);
@@ -93,8 +141,50 @@ export function createHttpServer({ runService, token, serviceInfo, onShutdown = 
         });
         return send(response, result.status, result.body);
       }
+      if (request.method === "POST" && url.pathname === "/v1/flow-selection") {
+        const result = await mutation(request, body, async () => {
+          validateFlowSelection(body);
+          if (!flowSourceService) throw new FlowError("FLOW_SOURCE_UNAVAILABLE", "No local flow source is configured.");
+          return { status: 200, body: await flowSourceService.selectFlow(body) };
+        });
+        return send(response, result.status, result.body);
+      }
+      if (request.method === "POST" && reportMatch) {
+        const result = await mutation(request, body, async () => {
+          if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).length !== 1 || !Object.hasOwn(body, "report")) throw new FlowError("INVALID_REPORT", "Request must contain only the report object.");
+          return { status: 200, body: await runService.writeReport(reportMatch[1], reportMatch[2], body.report) };
+        });
+        return send(response, result.status, result.body);
+      }
+      if (request.method === "POST" && url.pathname === "/v1/reviews") {
+        const result = await mutation(request, body, async () => {
+          if (!runReviewService) throw new FlowError("FLOW_REVIEW_UNAVAILABLE", "Flow review is unavailable.");
+          return { status: 201, body: await runReviewService.review(body) };
+        });
+        return send(response, result.status, result.body);
+      }
       if (request.method === "POST" && runMatch?.[2] === "checkpoint") {
         const result = await mutation(request, body, async () => ({ status: 200, body: await runService.checkpoint(runMatch[1], body.receipt ?? {}) }));
+        return send(response, result.status, result.body);
+      }
+      if (request.method === "POST" && runMatch?.[2] === "retry") {
+        const result = await mutation(request, body, async () => ({ status: 200, body: await runService.retryNode(runMatch[1], body) }));
+        return send(response, result.status, result.body);
+      }
+      if (request.method === "POST" && runMatch?.[2] === "block") {
+        const result = await mutation(request, body, async () => ({ status: 200, body: await runService.block(runMatch[1], body) }));
+        return send(response, result.status, result.body);
+      }
+      if (request.method === "POST" && runMatch?.[2] === "continue") {
+        const result = await mutation(request, body, async () => ({ status: 200, body: await runService.continueRun(runMatch[1], body) }));
+        return send(response, result.status, result.body);
+      }
+      if (request.method === "POST" && runMatch?.[2] === "switch-runtime") {
+        const result = await mutation(request, body, async () => ({ status: 200, body: await runService.switchNode(runMatch[1], body) }));
+        return send(response, result.status, result.body);
+      }
+      if (request.method === "POST" && runMatch?.[2] === "next") {
+        const result = await mutation(request, body, async () => ({ status: 200, body: await runService.next(runMatch[1]) }));
         return send(response, result.status, result.body);
       }
       if (request.method === "POST" && runMatch?.[2] === "lifecycle") {
@@ -115,7 +205,7 @@ export function createHttpServer({ runService, token, serviceInfo, onShutdown = 
       return send(response, 404, error(404, "NOT_FOUND", "Route not found.").body);
     } catch (caught) {
       const known = caught instanceof FlowError;
-      const status = caught.code === "UNAUTHORIZED" ? 401 : caught.code === "RUN_NOT_FOUND" ? 404 : caught.code === "IDEMPOTENCY_CONFLICT" ? 409 : known ? 400 : 500;
+      const status = caught.code === "UNAUTHORIZED" ? 401 : ["RUN_NOT_FOUND", "FLOW_NOT_FOUND"].includes(caught.code) ? 404 : caught.code === "IDEMPOTENCY_CONFLICT" ? 409 : known ? 400 : 500;
       return send(response, status, { error: { code: known ? caught.code : "INTERNAL_ERROR", message: known ? caught.message : "Internal service error." } });
     }
   });

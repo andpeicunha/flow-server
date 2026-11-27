@@ -1,0 +1,230 @@
+import { realpath, stat } from "node:fs/promises";
+import { execFile as execFileCallback } from "node:child_process";
+import { isAbsolute, relative, resolve, sep } from "node:path";
+import { promisify } from "node:util";
+import { FlowCatalog } from "../core/flow-catalog.js";
+import { validateFlowToolPolicy } from "../core/flow-tool-policy.js";
+import { FlowError } from "../core/errors.js";
+import { loadFlowSourceConfig } from "../core/flow-source-config.js";
+import { defaultSkillRoots } from "../core/skill-resolver.js";
+
+const execFile = promisify(execFileCallback);
+
+async function readGitIdentity(path) {
+  try {
+    const [{ stdout: commit }, { stdout: branch }] = await Promise.all([
+      execFile("git", ["-C", path, "rev-parse", "HEAD"], { timeout: 2_000 }),
+      execFile("git", ["-C", path, "symbolic-ref", "--quiet", "--short", "HEAD"], { timeout: 2_000 })
+    ]);
+    return { commit: commit.trim(), branch: branch.trim() };
+  } catch {
+    throw new FlowError("INVALID_GIT_FLOW_SOURCE", "A configured Git flow source must be a worktree on an attached branch.");
+  }
+}
+
+function containsPath(root, candidate) {
+  const path = relative(root, candidate);
+  return path === "" || (!path.startsWith(`..${sep}`) && path !== ".." && !isAbsolute(path));
+}
+
+function routeByTask(entries, task) {
+  if (typeof task !== "string" || !task.trim()) return undefined;
+  const text = task.toLocaleLowerCase();
+  const matches = entries.map((entry) => {
+    const routing = entry.flow.routing;
+    const words = routing?.when ?? [];
+    const avoid = routing?.avoid ?? [];
+    const hit = (word) => new RegExp(`(^|[^\\p{L}\\p{N}_-])${word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^\\p{L}\\p{N}_-]|$)`, "iu").test(text);
+    const matched = words.filter(hit).length;
+    const rejected = avoid.some(hit);
+    return { entry, matched, rejected, priority: routing?.priority ?? 0 };
+  }).filter((item) => item.matched > 0 && !item.rejected).sort((a, b) => b.priority - a.priority || b.matched - a.matched);
+  if (!matches.length) return undefined;
+  if (matches.length === 1) return { entry: matches[0].entry, reason: "unique local flow routing match" };
+  return { ambiguous: true, candidates: matches.map(({ entry }) => entry) };
+}
+
+export class FlowSourceService {
+  constructor({ configPath, loadConfig = loadFlowSourceConfig, createCatalog = (sources) => new FlowCatalog({ flowSources: sources }), gitIdentity = readGitIdentity, fs = { stat, realpath } } = {}) {
+    this.configPath = configPath;
+    this.loadConfig = loadConfig;
+    this.createCatalog = createCatalog;
+    this.fs = fs;
+    this.gitIdentity = gitIdentity;
+    this.sources = [];
+    this.catalog = createCatalog([]);
+  }
+
+  async initialize() {
+    if (!this.configPath) return this.status();
+    const config = await this.loadConfig(this.configPath);
+    const sources = [];
+    for (const source of config.sources) {
+      const info = await this.fs.stat(source.path).catch((error) => {
+        if (error.code === "ENOENT") throw new FlowError("FLOW_SOURCE_NOT_FOUND", `Flow source ${source.id} does not exist.`);
+        throw error;
+      });
+      if (!info.isDirectory()) throw new FlowError("FLOW_SOURCE_NOT_DIRECTORY", `Flow source ${source.id} must be a directory.`);
+      const identity = source.mode === "git" ? await this.gitIdentity(source.path) : undefined;
+      if (source.branch && identity?.branch !== source.branch) throw new FlowError("FLOW_SOURCE_BRANCH_MISMATCH", `Flow source ${source.id} is not on its configured branch.`);
+      const workspaceRoots = [];
+      for (const root of source.workspaceRoots ?? []) {
+        const rootInfo = await this.fs.stat(root).catch((error) => {
+          if (error.code === "ENOENT") throw new FlowError("WORKSPACE_ROOT_NOT_FOUND", `A workspace root for profile ${source.id} does not exist.`);
+          throw error;
+        });
+        if (!rootInfo.isDirectory()) throw new FlowError("WORKSPACE_ROOT_NOT_DIRECTORY", `A workspace root for profile ${source.id} must be a directory.`);
+        workspaceRoots.push(await this.fs.realpath(root));
+      }
+      sources.push({ ...source, path: await this.fs.realpath(source.path), workspaceRoots, ...(identity ? { gitCommit: identity.commit, currentBranch: identity.branch } : {}) });
+    }
+    this.sources = sources;
+    this.catalog = this.createCatalog(sources);
+    for (const entry of await this.catalog.listEntries()) validateFlowToolPolicy(sources.find((source) => source.id === entry.sourceId), entry.flow);
+    return this.status();
+  }
+
+  async list({ profileId } = {}) {
+    await this.refreshGitIdentities();
+    const entries = await this.catalog.listEntries();
+    return entries.filter((entry) => !profileId || entry.sourceId === profileId).map(({ flow, sourceId, contentHash }) => ({ id: flow.id, title: flow.title ?? flow.name ?? flow.id, sourceId, profileId: sourceId, contentHash, ...(flow.description ? { description: flow.description } : {}), ...(this.sources.find((source) => source.id === sourceId)?.gitCommit ? { gitCommit: this.sources.find((source) => source.id === sourceId).gitCommit } : {}) }));
+  }
+
+  async profileForWorkspace(workspace) {
+    if (typeof workspace !== "string" || !isAbsolute(workspace)) return undefined;
+    let canonicalWorkspace;
+    try { canonicalWorkspace = await this.fs.realpath(workspace); } catch { return undefined; }
+    const matches = this.sources.flatMap((source) => source.workspaceRoots.map((root) => ({ source, root })))
+      .filter(({ root }) => containsPath(root, canonicalWorkspace))
+      .sort((a, b) => b.root.length - a.root.length);
+    if (!matches.length) return undefined;
+    const longest = matches.filter((item) => item.root.length === matches[0].root.length);
+    const sourceIds = [...new Set(longest.map(({ source }) => source.id))];
+    return sourceIds.length === 1 ? sourceIds[0] : undefined;
+  }
+
+  async selectFlow({ workspace, profileId, flowId, task } = {}) {
+    const resolvedProfileId = profileId || await this.profileForWorkspace(workspace);
+    if (!resolvedProfileId) {
+      return { decision: "needs_confirmation", reason: "PROFILE_UNRESOLVED", profiles: this.sources.map(({ id }) => id) };
+    }
+    const source = this.sources.find((item) => item.id === resolvedProfileId);
+    if (!source) throw new FlowError("PROFILE_NOT_FOUND", "The selected profile is not configured locally.");
+    const entries = (await this.catalog.listEntries()).filter((entry) => entry.sourceId === resolvedProfileId);
+    if (flowId) {
+      const entry = entries.find((item) => item.flow.id === flowId);
+      if (!entry) throw new FlowError("FLOW_NOT_FOUND", "The selected flow does not exist in the resolved profile.");
+      return this.selection(entry, resolvedProfileId, "explicit flow selection");
+    }
+    const routed = routeByTask(entries, task);
+    if (routed?.ambiguous) return { decision: "needs_confirmation", reason: "FLOW_AMBIGUOUS", profileId: resolvedProfileId, flows: routed.candidates.map(({ flow }) => ({ id: flow.id, title: flow.title ?? flow.name ?? flow.id })) };
+    if (routed) return this.selection(routed.entry, resolvedProfileId, routed.reason);
+    return { decision: "needs_confirmation", reason: "FLOW_UNRESOLVED", profileId: resolvedProfileId, flows: entries.map(({ flow }) => ({ id: flow.id, title: flow.title ?? flow.name ?? flow.id })) };
+  }
+
+  selection(entry, profileId, reason) {
+    const source = this.sources.find((item) => item.id === entry.sourceId);
+    return { decision: "ready", reason, profileId, flowId: entry.flow.id, flowSourceId: entry.sourceId, flowContentHash: entry.contentHash,
+      ...(source?.execution?.runtime && !source.execution.profiles ? { runtime: source.execution.runtime } : {}),
+      ...(source?.execution?.profiles ? { executionProfiles: source.execution.profiles.map(({ id, name, runtime }) => ({ id, name, runtime })), ...(source.execution.defaultProfileId ? { defaultExecutionProfileId: source.execution.defaultProfileId } : {}) } : {}) };
+  }
+
+  async resolve(flowIdOrSelection, options = {}) {
+    const selection = typeof flowIdOrSelection === "object" && flowIdOrSelection !== null
+      ? flowIdOrSelection
+      : { ...options, flowId: flowIdOrSelection };
+    const { flowId, profileId, workspace, runtime, executionProfileId } = selection;
+    if (this.configPath) await this.initialize();
+    const selected = await this.selectFlow({ flowId, profileId, workspace });
+    if (selected.decision !== "ready") throw new FlowError("FLOW_SELECTION_REQUIRED", "Workspace profile is unknown. Confirm the correct local profile before starting a run.");
+    const entry = (await this.catalog.listEntries()).find((item) => item.flow.id === selected.flowId && item.sourceId === selected.profileId);
+    const source = this.sources.find((item) => item.id === entry.sourceId);
+    const execution = source?.execution;
+    const profiles = execution?.profiles ?? [];
+    if (selection.discoverExecutionProfiles) {
+      if (!selection.flowSourceId || !selection.flowContentHash || !workspace || selected.flowId !== flowId || selected.profileId !== profileId || entry.sourceId !== selection.flowSourceId) {
+        throw new FlowError("FLOW_SOURCE_MISMATCH", "The run's pinned flow and source identity could not be verified.");
+      }
+      if (entry.contentHash !== selection.flowContentHash) throw new FlowError("FLOW_CONTENT_CHANGED", "The flow source changed after this run started.");
+      if (source.workspaceRoots.length && await this.profileForWorkspace(workspace) !== source.id) {
+        throw new FlowError("RETRY_WORKSPACE_MISMATCH", "The pinned workspace no longer belongs to this flow source.");
+      }
+      return { candidates: profiles.map(({ id, name, runtime }) => ({ id, name, runtime })) };
+    }
+    let executionProfile;
+    if (profiles.length) {
+      const requestedId = executionProfileId ?? execution.defaultProfileId ?? (profiles.length === 1 ? profiles[0].id : undefined);
+      if (!requestedId) throw new FlowError("EXECUTION_PROFILE_REQUIRED", `Choose an execution profile for source ${selected.profileId}.`);
+      executionProfile = profiles.find(({ id }) => id === requestedId);
+      if (!executionProfile) throw new FlowError("EXECUTION_PROFILE_NOT_FOUND", `Execution profile ${requestedId} is not configured for source ${selected.profileId}.`);
+      if (runtime && runtime !== executionProfile.runtime) throw new FlowError("RUNTIME_PROFILE_MISMATCH", "The requested runtime differs from the selected execution profile.");
+    } else if (executionProfileId) {
+      throw new FlowError("EXECUTION_PROFILE_NOT_FOUND", `Source ${selected.profileId} has no execution profiles.`);
+    }
+    if (!executionProfile && runtime && execution?.runtime && runtime !== execution.runtime) throw new FlowError("RUNTIME_PROFILE_MISMATCH", "The requested runtime differs from this machine's configured runtime.");
+    const selectedRuntime = executionProfile?.runtime ?? execution?.runtime ?? runtime;
+    validateFlowToolPolicy(source, entry.flow, selectedRuntime);
+    const flowDefinition = structuredClone(entry.flow);
+    const fallbackExecutions = {};
+    const mapper = executionProfile ?? execution;
+    if (mapper) {
+      for (const node of flowDefinition.nodes) {
+        if (node.model && mapper.models) {
+          if (!Object.hasOwn(mapper.models, node.model)) throw new FlowError("NODE_MODEL_UNMAPPED", `Node ${node.id} has no model mapping for this execution profile.`);
+          node.model = mapper.models[node.model];
+        }
+        if (node.retryModel && mapper.models) {
+          if (!Object.hasOwn(mapper.models, node.retryModel)) throw new FlowError("NODE_MODEL_UNMAPPED", `Node ${node.id} has no retryModel mapping for this execution profile.`);
+          node.retryModel = mapper.models[node.retryModel];
+        }
+        for (const candidate of [node.model, node.retryModel]) {
+          if ((selectedRuntime === "claude" && candidate?.startsWith("openai/")) || (selectedRuntime === "codex" && candidate?.startsWith("anthropic/"))) {
+            throw new FlowError("NODE_MODEL_UNMAPPED", `Node ${node.id} has a model incompatible with ${selectedRuntime}.`);
+          }
+        }
+        const effort = node.effort ?? node.variant;
+        if (effort && mapper.efforts && Object.hasOwn(mapper.efforts, effort)) {
+          if (node.effort !== undefined) node.effort = mapper.efforts[effort];
+          else node.variant = mapper.efforts[effort];
+        }
+        node.executor = selectedRuntime;
+        if (!executionProfile && execution.fallback) {
+          const fallback = execution.fallback;
+          const override = Object.hasOwn(fallback.agents ?? {}, node.agent) ? fallback.agents[node.agent] : undefined;
+          const fallbackModel = override?.model ?? fallback.models[node.model];
+          if (!fallbackModel) throw new FlowError("FALLBACK_MODEL_UNMAPPED", `Node ${node.id} has no fallback model for this machine.`);
+          let fallbackRetryModel;
+          if (node.retryModel) {
+            fallbackRetryModel = override?.retryModel ?? fallback.models[node.retryModel];
+            if (!fallbackRetryModel) throw new FlowError("FALLBACK_MODEL_UNMAPPED", `Node ${node.id} has no fallback model for its retryModel on this machine.`);
+          }
+          fallbackExecutions[node.id] = { runtime: fallback.runtime, model: fallbackModel,
+            ...(fallbackRetryModel ? { retryModel: fallbackRetryModel } : {}),
+            effort: override?.effort ?? node.effort ?? node.variant ?? "medium" };
+        }
+      }
+    }
+    const gitIdentity = source?.mode === "git" ? await this.gitIdentity(source.path) : undefined;
+    if (source?.branch && gitIdentity?.branch !== source.branch) throw new FlowError("FLOW_SOURCE_BRANCH_MISMATCH", `Flow source ${source.id} is not on its configured branch.`);
+    if (source && gitIdentity) Object.assign(source, { gitCommit: gitIdentity.commit, currentBranch: gitIdentity.branch });
+    return { flowId: entry.flow.id, profileId: selected.profileId, flowSourceId: entry.sourceId, flowContentHash: entry.contentHash,
+      ...(selectedRuntime ? { runtime: selectedRuntime } : {}), flowDefinition,
+      skillRoots: source?.skills?.roots ?? defaultSkillRoots(), skillRootsConfigured: Boolean(source?.skills?.roots),
+      ...(executionProfile ? { executionProfileId: executionProfile.id, executionProfileSnapshot: structuredClone(executionProfile), availableExecutionProfiles: profiles.map(({ id, name, runtime }) => ({ id, name, runtime })) } : {}),
+      ...(!executionProfile && execution?.fallback ? { fallbackExecutions } : {}), ...(gitIdentity?.commit ? { flowGitCommit: gitIdentity.commit } : {}) };
+  }
+
+  async refreshGitIdentities() {
+    for (const source of this.sources) {
+      if (source.mode !== "git") continue;
+      const identity = await this.gitIdentity(source.path);
+      if (source.branch && identity.branch !== source.branch) throw new FlowError("FLOW_SOURCE_BRANCH_MISMATCH", `Flow source ${source.id} is not on its configured branch.`);
+      Object.assign(source, { gitCommit: identity.commit, currentBranch: identity.branch });
+    }
+  }
+
+  async status() {
+    await this.refreshGitIdentities();
+    return this.sources.map(({ id, mode, path, remote, branch, currentBranch, gitCommit, sync, workspaceRoots, execution }) => ({ id, mode, path, ...(workspaceRoots.length ? { workspaceRoots } : {}), ...(remote ? { remote } : {}), ...(branch ? { branch } : {}), ...(currentBranch ? { currentBranch } : {}), ...(gitCommit ? { gitCommit } : {}), ...(execution ? { execution: { ...(execution.runtime ? { runtime: execution.runtime } : {}), modelOverrides: Object.keys(execution.models ?? {}).length, ...(execution.profiles ? { profiles: execution.profiles.map(({ id, name, runtime }) => ({ id, name, runtime })), ...(execution.defaultProfileId ? { defaultProfileId: execution.defaultProfileId } : {}) } : {}) } } : {}), sync }));
+  }
+}

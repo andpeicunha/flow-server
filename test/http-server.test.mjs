@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile as execFileCallback, spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -10,6 +10,7 @@ import { LocalToken } from "../src/core/local-token.js";
 import { FileStateStore } from "../src/core/state-store.js";
 import { createHttpServer } from "../src/service/http-server.js";
 import { RunService } from "../src/service/run-service.js";
+import { RunReviewService } from "../src/service/run-review-service.js";
 import { ServiceHost } from "../src/service/service-host.js";
 
 const execFile = promisify(execFileCallback);
@@ -54,6 +55,8 @@ test("HTTP service exposes health and protects mutations with token and idempote
     const replayed = await fetch(`${context.base}/v1/runs`, options);
     assert.equal(replayed.status, 200);
     assert.equal((await replayed.json()).id, "run_test");
+    const forgedIdentity = await fetch(`${context.base}/v1/runs`, { method: "POST", headers: { "content-type": "application/json", "x-flow-local-token": context.token, "idempotency-key": "forged-run-key-01" }, body: JSON.stringify({ flowId: "hello-flow", workspace: "/workspace", runtime: "codex", executionMode: "guided", flowContentHash: "a".repeat(64) }) });
+    assert.equal(forgedIdentity.status, 400);
   } finally {
     await new Promise((resolve) => context.server.close(resolve));
     await rm(context.directory, { recursive: true, force: true });
@@ -90,9 +93,9 @@ test("HTTP idempotency survives a new server instance and audit reflects stored 
     const replayed = await fetch(`${context.base}/v1/runs`, { method: "POST", headers, body: JSON.stringify(body) });
     assert.equal(replayed.status, 200);
     assert.equal((await replayed.json()).id, "run_test");
-    await fetch(`${context.base}/v1/runs/run_test/checkpoint`, { method: "POST", headers: { ...headers, "idempotency-key": "failed-receipt-001" }, body: JSON.stringify({ receipt: { runId: "run_test", nodeId: "verify", status: "failed" } }) });
+    await fetch(`${context.base}/v1/runs/run_test/checkpoint`, { method: "POST", headers: { ...headers, "idempotency-key": "failed-receipt-001" }, body: JSON.stringify({ receipt: { schemaVersion: "v1", runId: "run_test", nodeId: "verify", status: "failed", recordedAt: "2026-01-01T00:00:00.000Z" } }) });
     const audit = await fetch(`${context.base}/v1/runs/run_test/audit`);
-    assert.deepEqual(await audit.json(), { schemaVersion: "v1", runId: "run_test", result: "failed", findings: [{ code: "NODE_FAILED", nodeId: "verify" }] });
+    assert.deepEqual(await audit.json(), { schemaVersion: "v1", runId: "run_test", result: "failed", findings: [{ code: "NODE_FAILED", nodeId: "verify" }, { code: "FLOW_DEFINITION_MISSING" }, { code: "RUN_INCOMPLETE" }] });
   } finally {
     await new Promise((resolve) => context.server.close(resolve));
     await rm(context.directory, { recursive: true, force: true });
@@ -113,6 +116,90 @@ test("HTTP list runs uses an opaque cursor with stable pages", async () => {
     assert.deepEqual(second.items.map((run) => run.id), ["run_first"]);
     assert.equal(second.nextCursor, null);
     assert.equal((await fetch(`${context.base}/v1/runs?cursor=not-a-cursor`)).status, 400);
+  } finally {
+    await new Promise((resolve) => context.server.close(resolve));
+    await rm(context.directory, { recursive: true, force: true });
+  }
+});
+
+test("HTTP flow review is explicit, protected, and writes an advisory report", async () => {
+  const context = await fixture();
+  try {
+    const store = new FileStateStore(context.directory);
+    await store.writeRun({ schemaVersion: "v1", id: "run_review", flowId: "sdd", flowContentHash: "a".repeat(64), runtime: "codex", executionMode: "guided", status: "completed", createdAt: "2026-01-01T00:00:00.000Z" });
+    await new Promise((resolve) => context.server.close(resolve));
+    const token = new LocalToken(context.directory);
+    context.server = createHttpServer({ token, runService: new RunService({ stateStore: store }), runReviewService: new RunReviewService({ stateStore: store }), serviceInfo: () => ({ status: "ready" }) });
+    await new Promise((resolve) => context.server.listen(0, "127.0.0.1", resolve));
+    context.base = `http://127.0.0.1:${context.server.address().port}`;
+    const unauthorized = await fetch(`${context.base}/v1/reviews`, { method: "POST", body: JSON.stringify({ flowId: "sdd" }) });
+    assert.equal(unauthorized.status, 401);
+    const invalid = await fetch(`${context.base}/v1/reviews`, { method: "POST", headers: { "content-type": "application/json", "x-flow-local-token": context.token, "idempotency-key": "flow-review-bad-01" }, body: JSON.stringify({ flowId: "sdd", compareVersions: "false" }) });
+    assert.equal(invalid.status, 400);
+    const reviewed = await fetch(`${context.base}/v1/reviews`, { method: "POST", headers: { "content-type": "application/json", "x-flow-local-token": context.token, "idempotency-key": "flow-review-key-01" }, body: JSON.stringify({ flowId: "sdd" }) });
+    assert.equal(reviewed.status, 201);
+    assert.equal((await reviewed.json()).advisoryOnly, true);
+  } finally {
+    await new Promise((resolve) => context.server.close(resolve));
+    await rm(context.directory, { recursive: true, force: true });
+  }
+});
+
+test("HTTP idempotency coalesces concurrent review requests", async () => {
+  const context = await fixture();
+  try {
+    await new Promise((resolve) => context.server.close(resolve));
+    const store = new FileStateStore(context.directory);
+    const token = new LocalToken(context.directory);
+    let calls = 0;
+    const runReviewService = { review: async () => {
+      calls += 1;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      return { call: calls };
+    } };
+    context.server = createHttpServer({ token, runService: new RunService({ stateStore: store }), runReviewService, serviceInfo: () => ({ status: "ready" }) });
+    await new Promise((resolve) => context.server.listen(0, "127.0.0.1", resolve));
+    context.base = `http://127.0.0.1:${context.server.address().port}`;
+    const options = { method: "POST", headers: { "content-type": "application/json", "x-flow-local-token": context.token, "idempotency-key": "concurrent-review-01" }, body: JSON.stringify({ flowId: "sdd" }) };
+    const [first, second] = await Promise.all([fetch(`${context.base}/v1/reviews`, options), fetch(`${context.base}/v1/reviews`, options)]);
+    assert.equal(calls, 1);
+    assert.deepEqual(await first.json(), { call: 1 });
+    assert.deepEqual(await second.json(), { call: 1 });
+  } finally {
+    await new Promise((resolve) => context.server.close(resolve));
+    await rm(context.directory, { recursive: true, force: true });
+  }
+});
+
+test("HTTP idempotency rechecks memory after a delayed disk miss", async () => {
+  const context = await fixture();
+  try {
+    await new Promise((resolve) => context.server.close(resolve));
+    const store = new FileStateStore(context.directory);
+    const token = new LocalToken(context.directory);
+    let reads = 0;
+    const delayedStore = {
+      readIdempotency: async () => {
+        reads += 1;
+        if (reads === 2) await new Promise((resolve) => setTimeout(resolve, 60));
+        return undefined;
+      },
+      writeIdempotency: (...argumentsList) => store.writeIdempotency(...argumentsList)
+    };
+    let calls = 0;
+    const runReviewService = { review: async () => {
+      calls += 1;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      return { call: calls };
+    } };
+    context.server = createHttpServer({ token, runService: new RunService({ stateStore: store }), runReviewService, idempotencyStore: delayedStore, serviceInfo: () => ({ status: "ready" }) });
+    await new Promise((resolve) => context.server.listen(0, "127.0.0.1", resolve));
+    context.base = `http://127.0.0.1:${context.server.address().port}`;
+    const options = { method: "POST", headers: { "content-type": "application/json", "x-flow-local-token": context.token, "idempotency-key": "delayed-review-key" }, body: JSON.stringify({ flowId: "sdd" }) };
+    const [first, second] = await Promise.all([fetch(`${context.base}/v1/reviews`, options), fetch(`${context.base}/v1/reviews`, options)]);
+    assert.equal(calls, 1);
+    assert.deepEqual(await first.json(), { call: 1 });
+    assert.deepEqual(await second.json(), { call: 1 });
   } finally {
     await new Promise((resolve) => context.server.close(resolve));
     await rm(context.directory, { recursive: true, force: true });
@@ -142,8 +229,15 @@ test("CLI starts, inspects, and stops a local service without adapters", async (
   const port = 47992;
   const argumentsList = [cli];
   try {
-    const started = await execFile(process.execPath, [...argumentsList, "start", "--state-dir", directory, "--port", String(port)]);
+    const flows = join(directory, "flows");
+    const sourceConfig = join(directory, "sources.json");
+    await mkdir(flows);
+    await writeFile(join(flows, "hello.yaml"), "schemaVersion: v1\nid: hello-flow\ntitle: Hello\nnodes: [{ id: work, title: Work }]\n");
+    await writeFile(sourceConfig, JSON.stringify({ schemaVersion: "v1", sources: [{ id: "personal", mode: "local", path: flows, workspaceRoots: [], sync: { pull: "confirm", push: "manual" } }] }));
+    const started = await execFile(process.execPath, [...argumentsList, "start", "--state-dir", directory, "--port", String(port)], { env: { ...process.env, FLOW_SOURCE_CONFIG: sourceConfig } });
     assert.equal(JSON.parse(started.stdout).status, "ready");
+    assert.equal(JSON.parse(started.stdout).sourceConfig, sourceConfig);
+    assert.equal((await (await fetch(`http://127.0.0.1:${port}/v1/flows`)).json()).items[0].profileId, "personal");
     const status = await execFile(process.execPath, [...argumentsList, "status", "--state-dir", directory]);
     assert.equal(JSON.parse(status.stdout).bind, "127.0.0.1");
     const stopped = await execFile(process.execPath, [...argumentsList, "stop", "--state-dir", directory]);
@@ -154,23 +248,114 @@ test("CLI starts, inspects, and stops a local service without adapters", async (
   }
 });
 
+test("CLI refuses missing or empty source configuration before starting a service", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "flow-cli-empty-source-test-"));
+  const stateDir = join(directory, "state");
+  const sourceConfig = join(directory, "sources.json");
+  const args = [cli, "start", "--state-dir", stateDir, "--port", "47997"];
+  const options = { env: { ...process.env, FLOW_SOURCE_CONFIG: sourceConfig } };
+  try {
+    await assert.rejects(execFile(process.execPath, args, options), /Flow source config is missing/);
+    await writeFile(sourceConfig, JSON.stringify({ schemaVersion: "v1", sources: [] }));
+    await assert.rejects(execFile(process.execPath, args, options), /No flow profiles are configured/);
+    await assert.rejects(readFile(join(stateDir, "service.json"), "utf8"), { code: "ENOENT" });
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("CLI preserves a live service lock when its port does not answer", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "flow-cli-lock-test-"));
+  const owner = JSON.stringify({ pid: process.pid, instanceId: "existing" });
+  try {
+    await mkdir(join(directory, "service.lock"));
+    await writeFile(join(directory, "service.lock", "owner.json"), owner);
+    await assert.rejects(execFile(process.execPath, [cli, "start", "--state-dir", directory, "--port", "47999"]), /active process/);
+    assert.equal(await readFile(join(directory, "service.lock", "owner.json"), "utf8"), owner);
+    await assert.rejects(readFile(join(directory, "service.json"), "utf8"), { code: "ENOENT" });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("flow CLI uses the local API and requires explicit direct-mode approval", async () => {
+  const help = await execFile(process.execPath, [flowCli, "help"]);
+  assert.match(help.stdout, /fallbackExecution/);
+  assert.match(help.stdout, /do not switch or start a replacement run/);
   const directory = await mkdtemp(join(tmpdir(), "flow-client-test-"));
+  const flows = join(directory, "flows");
+  const workspace = join(directory, "workspace");
+  const sourceConfig = join(directory, "sources.json");
   const port = 47995;
-  const host = new ServiceHost({ stateDir: directory, port });
+  await mkdir(flows);
+  await mkdir(workspace);
+  await writeFile(join(flows, "hello.yaml"), "schemaVersion: v1\nid: hello-flow\ntitle: Hello\nnodes: [{ id: work, title: Work }]\n");
+  await writeFile(sourceConfig, JSON.stringify({ schemaVersion: "v1", sources: [{ id: "personal", mode: "local", path: flows, workspaceRoots: [workspace], sync: { pull: "confirm", push: "manual" } }] }));
+  const host = new ServiceHost({ stateDir: directory, sourceConfig, port });
   const withStateDir = (command, ...argumentsList) => [flowCli, command, "--state-dir", directory, ...argumentsList];
   try {
     await host.start();
     const listed = await execFile(process.execPath, withStateDir("list"));
     assert.deepEqual(JSON.parse(listed.stdout), { items: [], nextCursor: null });
-    await assert.rejects(execFile(process.execPath, withStateDir("start", "--flow", "hello-flow", "--workspace", "/workspace", "--runtime", "codex", "--mode", "direct")), /approve-host-adapter/);
-    const created = await execFile(process.execPath, withStateDir("start", "--flow", "hello-flow", "--workspace", "/workspace", "--runtime", "codex", "--mode", "guided"));
+    await assert.rejects(execFile(process.execPath, withStateDir("start", "--flow", "hello-flow", "--workspace", workspace, "--runtime", "codex", "--mode", "direct")), /approve-host-adapter/);
+    const created = await execFile(process.execPath, withStateDir("start", "--flow", "hello-flow", "--task", "Keep this task", "--workspace", workspace, "--runtime", "codex", "--mode", "guided"));
     const run = JSON.parse(created.stdout);
     assert.equal(run.status, "created");
+    assert.equal(run.task, "Keep this task");
     const inspected = await execFile(process.execPath, withStateDir("inspect", run.id));
     assert.equal(JSON.parse(inspected.stdout).id, run.id);
+    const ready = await execFile(process.execPath, withStateDir("next", run.id));
+    assert.equal(JSON.parse(ready.stdout).nodes[0].id, "work");
+    const blocked = await execFile(process.execPath, withStateDir("block", run.id, "work", "--reason", "Provider limit reached", "--rate-limit"));
+    assert.equal(JSON.parse(blocked.stdout).block.reason, "RATE_LIMIT");
+    const retryInspection = await execFile(process.execPath, withStateDir("retry-inspect", run.id, "work"));
+    assert.equal(JSON.parse(retryInspection.stdout).fallbackExecution, undefined);
+    const blockedNext = await execFile(process.execPath, withStateDir("next", run.id));
+    assert.match(JSON.parse(blockedNext.stdout).action, /No fallback runtime is pinned/);
+    await assert.rejects(execFile(process.execPath, withStateDir("switch-runtime", run.id, "work", "--reason", "Use another runtime", "--workspace", workspace, "--worktree-review", "No partial changes", "--reviewed-predecessors")), /no configured fallback/i);
     const audit = await execFile(process.execPath, withStateDir("audit", run.id));
-    assert.equal(JSON.parse(audit.stdout).result, "passed");
+    assert.equal(JSON.parse(audit.stdout).result, "incomplete");
+    await new FileStateStore(directory).writeRun({ ...run, status: "completed" });
+    const review = await execFile(process.execPath, withStateDir("review", "hello-flow", "--last", "5"));
+    assert.equal(JSON.parse(review.stdout).advisoryOnly, true);
+  } finally {
+    await host.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("service loads an explicit local source and records its canonical identity", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "flow-source-http-test-"));
+  const flows = join(directory, "flows");
+  const workspace = join(directory, "workspace");
+  const state = join(directory, "state");
+  const sourceConfig = join(directory, "sources.json");
+  const port = 47996;
+  await mkdir(flows);
+  await mkdir(workspace);
+  await writeFile(join(flows, "hello.yaml"), "schemaVersion: v1\nid: hello-flow\ntitle: Hello\nnodes: [{ id: work, title: Work }]\n");
+  await writeFile(sourceConfig, JSON.stringify({ schemaVersion: "v1", sources: [{ id: "personal", mode: "local", path: flows, workspaceRoots: [workspace], sync: { pull: "confirm", push: "manual" } }] }));
+  const host = new ServiceHost({ stateDir: state, sourceConfig, port, createRunService: (store, flowResolver) => new RunService({ stateStore: store, flowResolver, createId: () => "run_source", now: () => "2026-01-01T00:00:00.000Z" }) });
+  try {
+    await host.start();
+    const listed = await (await fetch(`http://127.0.0.1:${port}/v1/flows`)).json();
+    assert.equal(listed.items[0].sourceId, "personal");
+    assert.match(listed.items[0].contentHash, /^[a-f0-9]{64}$/);
+    const token = (await readFile(join(state, "service.token"), "utf8")).trim();
+    const selection = await fetch(`http://127.0.0.1:${port}/v1/flow-selection`, { method: "POST", headers: { "content-type": "application/json", "x-flow-local-token": token, "idempotency-key": "source-select-key-001" }, body: JSON.stringify({ flowId: "hello-flow", workspace }) });
+    const selected = await selection.json();
+    assert.equal(selected.decision, "ready");
+    assert.equal(selected.profileId, "personal");
+    const uncertainSelection = await fetch(`http://127.0.0.1:${port}/v1/flow-selection`, { method: "POST", headers: { "content-type": "application/json", "x-flow-local-token": token, "idempotency-key": "source-select-key-002" }, body: JSON.stringify({ flowId: "hello-flow", workspace: directory }) });
+    const uncertain = await uncertainSelection.json();
+    assert.equal(uncertain.decision, "needs_confirmation");
+    const refusedRun = await fetch(`http://127.0.0.1:${port}/v1/runs`, { method: "POST", headers: { "content-type": "application/json", "x-flow-local-token": token, "idempotency-key": "source-run-key-002" }, body: JSON.stringify({ flowId: "hello-flow", workspace: directory, runtime: "codex", executionMode: "guided" }) });
+    assert.equal(refusedRun.status, 400);
+    const created = await fetch(`http://127.0.0.1:${port}/v1/runs`, { method: "POST", headers: { "content-type": "application/json", "x-flow-local-token": token, "idempotency-key": "source-run-key-001" }, body: JSON.stringify({ flowId: "hello-flow", profileId: selected.profileId, workspace, runtime: "codex", executionMode: "guided" }) });
+    const run = await created.json();
+    assert.equal(run.flowSourceId, "personal");
+    assert.equal(run.profileId, "personal");
+    assert.equal(run.flowContentHash, listed.items[0].contentHash);
+    assert.equal(run.flowDefinition, undefined);
+    assert.equal((await new FileStateStore(state).readRun("run_source")).flowDefinition.id, "hello-flow");
   } finally {
     await host.stop();
     await rm(directory, { recursive: true, force: true });

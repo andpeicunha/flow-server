@@ -6,11 +6,14 @@ const transitions = new Map([
   ["created:start", "running"],
   ["created:stop", "stopped"],
   ["running:pause", "paused"],
+  ["running:block", "blocked"],
   ["running:stop", "stopped"],
   ["running:complete", "completed"],
   ["running:fail", "failed"],
   ["paused:resume", "running"],
-  ["paused:stop", "stopped"]
+  ["paused:stop", "stopped"],
+  ["blocked:continue", "running"],
+  ["blocked:stop", "stopped"]
 ]);
 
 export function transitionRun(status, action) {
