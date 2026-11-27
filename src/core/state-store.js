@@ -30,6 +30,37 @@ export class FileStateStore {
     await this.writeJson(join(this.runDirectory(receipt.runId), `receipt-${receipt.nodeId}.json`), receipt);
   }
 
+  dispatchPath(runId, nodeId, attempt) {
+    if (typeof nodeId !== "string" || !/^[a-z][a-z0-9_-]{0,62}$/.test(nodeId)) throw new TypeError("Invalid node id.");
+    if (!Number.isInteger(attempt) || attempt < 1 || attempt > 101) throw new TypeError("Invalid dispatch attempt.");
+    return join(this.runDirectory(runId), `dispatch-${nodeId}-${attempt}.json`);
+  }
+
+  // Write-once per (node, attempt): a repeated dispatch keeps the first record. The name must not match the receipt- pattern.
+  async writeDispatch(runId, nodeId, attempt, dispatch) {
+    const target = this.dispatchPath(runId, nodeId, attempt);
+    const temporary = `${target}.${randomUUID()}.tmp`;
+    await this.fs.mkdir(dirname(target), { recursive: true, mode: 0o700 });
+    try {
+      await this.fs.writeFile(temporary, `${JSON.stringify(this.redactor(dispatch), null, 2)}\n`, { encoding: "utf8", mode: 0o600, flag: "wx" });
+      await this.fs.link(temporary, target);
+      return true;
+    } catch (error) {
+      if (error.code === "EEXIST") return false;
+      throw error;
+    } finally {
+      await this.fs.unlink(temporary).catch((error) => { if (error.code !== "ENOENT") throw error; });
+    }
+  }
+
+  async readDispatch(runId, nodeId, attempt) {
+    try { return await this.readJson(this.dispatchPath(runId, nodeId, attempt)); }
+    catch (error) {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    }
+  }
+
   async reportDirectory(runId, { create = false } = {}) {
     const runDirectory = this.runDirectory(runId);
     const runInfo = await this.fs.lstat(runDirectory);
